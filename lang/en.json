@@ -1,0 +1,24 @@
+{
+  "GRIMPULSE": {
+    "Round": "Round {n}",
+    "MoreStatus": "+ {n} More Status",
+    "Unknown": "???",
+    "EndTurn": "End turn",
+    "PrevTurn": "Previous turn",
+    "NextTurn": "Next turn",
+    "HandleHint": "Drag to move. Double-click to reset the position.",
+    "Settings": {
+      "Theme": { "Name": "Colour theme", "Hint": "Same four themes as Grim Almanac. Each player picks their own.",
+        "Crimson": "Black and red", "Ash": "Black, grey and white", "Amethyst": "White and purple", "Abyss": "Black and blue" },
+      "Scale": { "Name": "Size", "Hint": "Scale of the turn strip on your screen." },
+      "MaxTurns": { "Name": "Turns shown", "Hint": "How many upcoming turns the strip shows at once." },
+      "PlayerNumbers": { "Name": "Exact HP and AC shown to players", "Hint": "Everyone else is shown as a heartbeat line and blood stains only. The GM always sees the numbers.",
+        "Party": "Player characters only", "All": "Every combatant" },
+      "ImageSource": { "Name": "Picture used", "Hint": "Which image fills the turn frame.",
+        "Actor": "Actor portrait", "Token": "Token image" },
+      "RoundBanner": { "Name": "Round banner", "Hint": "Dim the screen and sweep the round number across it when a new round begins." },
+      "BannerRoundOne": { "Name": "Round banner on round 1", "Hint": "Leave this off if another module, such as Encounter FX, already announces the start of combat." },
+      "HideCoreTracker": { "Name": "Hide Foundry's Combat Tracker from players", "Hint": "Removes the Combat tab from the sidebar for players. The GM always keeps it." }
+    }
+  }
+}
