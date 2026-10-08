@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Grim Pulse - Combat Turn Tracker  (v0.2.0)
+   Grim Pulse - Combat Turn Tracker  (v0.2.2)
    1. Tokens and themes     5. Status chips       9. Stage: text scenes
    2. Strip and header      6. Footer buttons    10. Stage: death save
    3. Turn frames           7. Heal and revive   11. Core tracker toggle
@@ -880,14 +880,14 @@
 /* Wings rise over the top edge of the frame when a combatant comes back from 0 HP */
 #grim-pulse .gp-wings {
   position: absolute;
-  left: calc(var(--gp-card-w) / 2 - 150px);
-  top: -112px;
+  left: calc(var(--gp-card-w) / 2 - 170px);
+  top: -116px;
   z-index: 9;
-  width: 300px;
-  height: 130px;
+  width: 340px;
+  height: 134px;
   overflow: visible;
   pointer-events: none;
-  filter: drop-shadow(0 0 8px rgba(255, 233, 160, 0.9));
+  filter: drop-shadow(0 0 7px rgba(255, 255, 255, 0.9)) drop-shadow(0 2px 3px rgba(0, 0, 0, 0.6));
   animation: gp-wings-life 2.8s ease-out var(--gp-fx-delay, 0ms) both;
 }
 
@@ -1364,6 +1364,16 @@
   border-color: var(--gp-line-hi);
 }
 
+/* While Dice So Nice rolls: a light dim that stays under the 3D dice (their canvas sits at z-index 1000) */
+#grim-pulse-dim {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0.62));
+  pointer-events: none;
+  animation: gps-fade-in 0.3s ease-out both;
+}
+
 /* ----- The result ----- */
 
 #grim-pulse-stage .gps-death {
@@ -1378,7 +1388,7 @@
 }
 
 #grim-pulse-stage .gps-skull {
-  width: min(84vw, 640px);
+  width: min(90vw, 760px);
   height: auto;
   overflow: visible;
   filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.9));
@@ -1404,32 +1414,87 @@
   text-shadow: 0 2px 3px #000;
 }
 
-/* Passed: a flame takes one eye socket, then the other */
-#grim-pulse-stage .gps-flame {
+/* Passed: light takes one eye socket, then the other. Glow, core, wisp and embers, no drawn flame. */
+#grim-pulse-stage .gps-eye {
   transform-box: fill-box;
+  transform-origin: center;
+}
+
+#grim-pulse-stage .gps-eye-halo,
+#grim-pulse-stage .gps-eye-wisp,
+#grim-pulse-stage .gps-eye-core {
+  mix-blend-mode: screen;
+  transform-box: fill-box;
+}
+
+#grim-pulse-stage .gps-eye-halo {
+  transform-origin: center;
+  animation: gps-eye-pulse 1.1s ease-in-out infinite alternate;
+}
+
+#grim-pulse-stage .gps-eye-core {
+  transform-origin: center;
+  animation: gps-eye-pulse 0.37s ease-in-out infinite alternate;
+}
+
+#grim-pulse-stage .gps-eye-wisp {
   transform-origin: 50% 100%;
-  filter: drop-shadow(0 0 8px var(--gp-gold)) drop-shadow(0 0 18px #ff8a1f);
-  animation: gps-flicker 0.42s ease-in-out infinite alternate;
+  animation: gps-wisp 0.55s ease-in-out infinite alternate;
 }
 
-#grim-pulse-stage .gps-flame.gps-ignite {
-  animation: gps-ignite 0.8s cubic-bezier(0.2, 1.4, 0.4, 1) 0.55s both, gps-flicker 0.42s ease-in-out 1.35s infinite alternate;
+@keyframes gps-eye-pulse {
+  from { transform: scale(0.86); opacity: 0.75; }
+  to { transform: scale(1.1); opacity: 1; }
 }
 
-@keyframes gps-flicker {
-  from { transform: scale(1, 1); }
-  to { transform: scale(0.92, 1.12); }
+@keyframes gps-wisp {
+  from { transform: scale(0.8, 0.7) skewX(-6deg); opacity: 0.55; }
+  to { transform: scale(1.1, 1.15) skewX(7deg); opacity: 0.95; }
 }
 
-@keyframes gps-ignite {
-  0% { opacity: 0; transform: scale(0.1); }
-  60% { opacity: 1; transform: scale(1.5, 1.7); }
-  100% { opacity: 1; transform: none; }
+#grim-pulse-stage .gps-ember {
+  opacity: 0;
+  mix-blend-mode: screen;
+  animation: gps-ember 1.45s linear infinite;
+}
+
+@keyframes gps-ember {
+  0% { opacity: 0; transform: translate(0, 0) scale(1); }
+  15% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--ex, 0px), -52px) scale(0.3); }
+}
+
+#grim-pulse-stage .gps-eye-ring {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+#grim-pulse-stage .gps-eye.gps-ignite {
+  animation: gps-eye-on 0.6s cubic-bezier(0.2, 1.5, 0.4, 1) 0.55s both;
+}
+
+@keyframes gps-eye-on {
+  from { opacity: 0; transform: scale(0.15); }
+}
+
+#grim-pulse-stage .gps-ignite .gps-eye-ring {
+  animation: gps-eye-ring 0.8s ease-out 0.55s both;
+}
+
+@keyframes gps-eye-ring {
+  0% { opacity: 1; transform: scale(0.3); }
+  100% { opacity: 0; transform: scale(3.2); }
 }
 
 #grim-pulse-stage .gps-success .gps-sub,
 #grim-pulse-stage .gps-revive .gps-sub {
   color: var(--gp-gold);
+}
+
+#grim-pulse-stage .gps-winged .gps-sub {
+  color: #ffffff;
+  text-shadow: 0 0 12px rgba(255, 255, 255, 0.8), 0 2px 3px #000;
 }
 
 /* Third pass, or a natural 20: the wings open */
@@ -1438,7 +1503,40 @@
 }
 
 #grim-pulse-stage .gps-winged .gps-skull {
-  filter: drop-shadow(0 0 22px rgba(255, 233, 160, 0.75)) drop-shadow(0 10px 22px rgba(0, 0, 0, 0.9));
+  filter: drop-shadow(0 0 22px rgba(255, 255, 255, 0.7)) drop-shadow(0 10px 22px rgba(0, 0, 0, 0.9));
+}
+
+/* ...and the skull itself turns white, with a glint passing over it and sparkles around it */
+#grim-pulse-stage .gps-winged .gps-skull-whole {
+  animation: gps-whiten 0.9s ease-out 0.6s both;
+}
+
+@keyframes gps-whiten {
+  from { filter: none; }
+  40% { filter: grayscale(1) brightness(1.9); }
+  to { filter: grayscale(1) brightness(1.28); }
+}
+
+#grim-pulse-stage .gps-glint {
+  animation: gps-glint-pass 1s ease-in-out 1.3s 2 both;
+}
+
+@keyframes gps-glint-pass {
+  from { transform: translateX(0); }
+  to { transform: translateX(330px); }
+}
+
+#grim-pulse-stage .gps-star {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  filter: drop-shadow(0 0 4px #ffffff);
+  animation: gps-star 0.7s ease-in-out 2 both;
+}
+
+@keyframes gps-star {
+  0%, 100% { opacity: 0; transform: scale(0) rotate(0deg); }
+  50% { opacity: 1; transform: scale(1) rotate(45deg); }
 }
 
 /* Failed: the new crack draws itself and the skull shudders */

@@ -26,7 +26,7 @@ To go back a turn, use Foundry's own Combat Tracker.
 ## Full-screen moments
 
 - **Round banner** from round 2 onward.
-- **Death save die** when a player character starts their turn at 0 HP. Everyone sees it; only the character's owner or the GM can click it. The roll is the real dnd5e death saving throw.
+- **Death save die** when a player character starts their turn at 0 HP. Everyone sees it; only the character's owner or the GM can click it. The roll is the real dnd5e death saving throw. With Dice So Nice installed, clicking the die clears the screen, the 3D die rolls for everyone, and the skull appears only after it lands. Without it, the skull appears straight away.
   - Pass: a flame lights one eye of the skull, then the other. Third pass: wings, "Stable", and no more rolls.
   - Fail: the skull cracks, cracks further, then bursts, followed by the character's name and a random farewell line.
   - A natural 20 shows the wings and "Rises again".
@@ -52,4 +52,4 @@ All lines live in the `PHRASES` block at the top of `scripts/main.js`: `reaction
 https://github.com/NuttoSGXX/Grim_Pulse/releases/latest/download/module.json
 ```
 
-For a release, attach `module.json` and `module.zip` to a GitHub Release tagged `v0.2.0`.
+For a release, attach `module.json` and `module.zip` to a GitHub Release tagged `v0.2.2`.

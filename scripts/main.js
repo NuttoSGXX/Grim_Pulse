@@ -1,5 +1,5 @@
 /**
- * Grim Pulse - Combat Turn Tracker  (v0.2.0)
+ * Grim Pulse - Combat Turn Tracker  (v0.2.2)
  * Foundry VTT V13 / V14, written against the dnd5e system.
  *
  * Two DOM roots, both plain elements:
@@ -22,6 +22,8 @@ const STATUS_WRAP_AT = 10; // characters per line before the next word drops to 
 const MYSTERY_IMG = "icons/svg/mystery-man.svg";
 const HEAL_MS = 1700;
 const REVIVE_MS = 2800;
+const DICE_WAIT_MS = 10000; // longest we wait for Dice So Nice before showing the result anyway
+const DIM_MAX_MS = 15000; // the roll dim never outlives this, whatever happens
 
 /* ------------------------------------------------------------------ */
 /*  Flavour lines. Edit freely: one is picked at random each time.     */
@@ -91,6 +93,23 @@ const isVideo = (src) => /\.(webm|mp4|m4v|ogv)(\?|$)/i.test(src ?? "");
 
 const reducedMotion = () => Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
 
+/** Is Dice So Nice installed, enabled and ready on this client? */
+const hasDice3d = () => Boolean(game.modules.get("dice-so-nice")?.active && game.dice3d);
+
+/**
+ * Resolves when Dice So Nice has finished animating the roll in this chat message.
+ * Resolves at once if there is no message or no Dice So Nice, and never waits longer than DICE_WAIT_MS.
+ */
+async function waitForDice(messageId) {
+  if (!messageId || !hasDice3d() || typeof game.dice3d.waitFor3DAnimationByMessageID !== "function") return;
+  const timeout = new Promise((resolve) => setTimeout(resolve, DICE_WAIT_MS));
+  try {
+    await Promise.race([game.dice3d.waitFor3DAnimationByMessageID(messageId), timeout]);
+  } catch (err) {
+    console.warn(`${MODULE_ID} | could not wait for Dice So Nice`, err);
+  }
+}
+
 /** "Concentrating: Haste" becomes two lines: a word moves down once the line would pass STATUS_WRAP_AT. */
 function wrapStatus(name) {
   const lines = [];
@@ -159,23 +178,54 @@ const BLOOD_SVG = `<svg class="gp-blood" viewBox="0 0 100 100" preserveAspectRat
 </g></svg>`;
 
 /**
- * The skull. Every shape carries its own fill and stroke attributes so nothing
- * depends on inherited CSS (which is what turns inline art solid black).
+ * The skull: flat vector shapes shaded with gradients so it reads as a raised, lit object.
+ * Every fill names a plain fallback colour after its gradient, so a missing gradient
+ * can never turn the art solid black.
  */
-const SKULL_CORE = `
-<path d="M100 14 C48 14 22 50 22 96 C22 124 34 142 50 152 L54 180 Q56 190 66 190 L134 190 Q144 190 146 180 L150 152 C166 142 178 124 178 96 C178 50 152 14 100 14 Z" fill="#e6dccb" stroke="#1b0a0c" stroke-width="4" stroke-linejoin="round"/>
-<path d="M100 22 C58 22 33 52 30 90 C44 58 70 40 104 36 Z" fill="#ffffff" fill-opacity="0.4" stroke="none"/>
-<path d="M150 152 C166 142 178 124 178 96 C178 80 174 64 168 52 C170 92 160 130 138 150 L134 188 Q144 188 146 180 Z" fill="#000000" fill-opacity="0.22" stroke="none"/>
-<ellipse cx="68" cy="104" rx="22" ry="24" fill="#14070a" stroke="none"/>
-<ellipse cx="132" cy="104" rx="22" ry="24" fill="#14070a" stroke="none"/>
-<path d="M100 126 L88 150 Q100 157 112 150 Z" fill="#14070a" stroke="none"/>
-<path d="M62 168 H138 M78 168 V189 M89 168 V190 M100 168 V190 M111 168 V190 M122 168 V189" fill="none" stroke="#1b0a0c" stroke-width="3" stroke-linecap="round"/>`;
+const SKULL_OUTLINE = "M100 12 C50 12 20 46 20 92 C20 112 26 128 38 140 C40 146 40 150 42 156 L50 160 L54 182 Q56 192 66 192 L134 192 Q144 192 146 182 L150 160 L158 156 C160 150 160 146 162 140 C174 128 180 112 180 92 C180 46 150 12 100 12 Z";
 
-const flame = (cx, cy, cls) => `
-<g class="gps-flame ${cls}">
-<path d="M${cx} ${cy + 17} C${cx - 17} ${cy + 11} ${cx - 11} ${cy - 5} ${cx - 3} ${cy - 20} C${cx - 1} ${cy - 9} ${cx + 7} ${cy - 9} ${cx + 5} ${cy - 22} C${cx + 18} ${cy - 8} ${cx + 17} ${cy + 11} ${cx} ${cy + 17} Z" fill="#ffc94d" stroke="#fff3c9" stroke-width="1.5"/>
-<path d="M${cx} ${cy + 14} C${cx - 8} ${cy + 10} ${cx - 6} ${cy} ${cx} ${cy - 8} C${cx + 6} ${cy} ${cx + 8} ${cy + 10} ${cx} ${cy + 14} Z" fill="#ffffff" stroke="none"/>
+const mirrored = (shapes) => `${shapes}<g transform="translate(200 0) scale(-1 1)">${shapes}</g>`;
+
+const SKULL_TEETH = [0, 1, 2, 3, 4, 5]
+  .map((i) => `<rect x="${64 + i * 12}" y="165" width="12" height="24" rx="3.5" fill="url(#gp-g-tooth) #f3ead6" stroke="#1b0a0c" stroke-width="2"/><rect x="${66 + i * 12}" y="167.5" width="3" height="12" rx="1.5" fill="#ffffff" fill-opacity="0.7" stroke="none"/>`)
+  .join("");
+
+const SKULL_CORE = `
+<path d="${SKULL_OUTLINE}" fill="#1b0a0c" stroke="#1b0a0c" stroke-width="7" stroke-linejoin="round"/>
+<path d="${SKULL_OUTLINE}" fill="url(#gp-g-bone) #e6dccb" stroke="none"/>
+<path d="M100 12 C150 12 180 46 180 92 C180 112 174 128 162 140 C160 146 160 150 158 156 L150 160 L146 182 Q144 192 134 192 L116 192 C132 150 136 80 100 12 Z" fill="url(#gp-g-shade) #8a7a62" stroke="none"/>
+<path d="M30 96 C24 60 50 26 96 20 C66 30 44 54 40 96 C39 104 31 104 30 96 Z" fill="#ffffff" fill-opacity="0.85" stroke="none"/>
+<path d="M60 22 C74 17 90 16 104 18 C92 19 78 22 66 27 Z" fill="#ffffff" fill-opacity="0.6" stroke="none"/>
+<path d="M34 86 C50 68 86 70 100 90 C114 70 150 68 166 86 C150 77 116 79 100 99 C84 79 50 77 34 86 Z" fill="#6f5d44" fill-opacity="0.42" stroke="none"/>
+${mirrored(`
+<path d="M44 102 C44 86 58 78 72 80 C86 82 94 94 92 108 C90 122 78 130 64 128 C52 126 44 116 44 102 Z" fill="url(#gp-g-socket) #14070a" stroke="#1b0a0c" stroke-width="2.5"/>
+<path d="M47 121 C56 134 77 136 90 124" fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M40 142 C50 147 58 150 62 161 L52 160 L44 156 Z" fill="#6f5d44" fill-opacity="0.38" stroke="none"/>`)}
+<path d="M100 122 C94 132 87 144 90 150 C94 155 98 151 100 146 C102 151 106 155 110 150 C113 144 106 132 100 122 Z" fill="url(#gp-g-socket) #14070a" stroke="#1b0a0c" stroke-width="2"/>
+<path d="M56 163 H144" fill="none" stroke="#1b0a0c" stroke-width="3.5" stroke-linecap="round"/>
+${SKULL_TEETH}`;
+
+/**
+ * Light in an eye socket. Not a drawn flame: a blurred glow, a hot core, a wisp that
+ * stretches up out of the socket, and embers that drift upward and die out.
+ */
+function eyeFx(cx, cy, cls) {
+  const embers = [0, 1, 2, 3, 4, 5, 6]
+    .map((i) => {
+      const x = cx - 13 + ((i * 37) % 27);
+      const drift = ((i * 53) % 22) - 11;
+      return `<circle class="gps-ember" cx="${x}" cy="${cy + 6}" r="${(1.6 + (i % 3) * 0.8).toFixed(1)}" fill="#fff3c4" style="--ex:${drift}px;animation-delay:${(i * 0.21).toFixed(2)}s"/>`;
+    })
+    .join("");
+  return `
+<g class="gps-eye ${cls}">
+<circle class="gps-eye-halo" cx="${cx}" cy="${cy}" r="34" fill="url(#gp-g-orb) #ffc94d" filter="url(#gp-blur)"/>
+<ellipse class="gps-eye-wisp" cx="${cx}" cy="${cy - 16}" rx="10" ry="28" fill="url(#gp-g-orb) #ffc94d" filter="url(#gp-blur)"/>
+<circle class="gps-eye-core" cx="${cx}" cy="${cy + 2}" r="8" fill="#ffffff" filter="url(#gp-blur-s)"/>
+<circle class="gps-eye-ring" cx="${cx}" cy="${cy}" r="14" fill="none" stroke="#fff6d6" stroke-width="3"/>
+${embers}
 </g>`;
+}
 
 const CRACKS = [
   // first failure
@@ -186,11 +236,44 @@ const CRACKS = [
   `<path class="gps-crack gps-crack-3" pathLength="1" d="M104 142 L92 160 L100 176 M152 64 L172 70 M58 50 L70 30 M44 78 L52 100 M140 50 L146 32 M176 110 L156 122 L160 144" fill="none" stroke="#1b0a0c" stroke-width="3.5" stroke-linejoin="miter"/>`
 ];
 
-const WING_PATH = "M168 122 C198 60 258 28 332 22 C324 48 320 58 302 68 C318 70 322 78 314 92 C302 96 298 100 286 104 C294 110 292 118 282 128 C264 132 252 134 242 136 C246 144 240 152 228 156 C206 158 188 150 168 142 Z";
-const WING = `
-<path d="${WING_PATH}" fill="#f6f1e4" stroke="#d8b65a" stroke-width="2.5" stroke-linejoin="round"/>
-<path d="M186 132 C222 108 264 76 314 42 M192 142 C228 128 262 112 300 86 M200 148 C226 142 250 136 274 124" fill="none" stroke="#d8b65a" stroke-width="1.6" stroke-linecap="round" stroke-opacity="0.8"/>`;
+/**
+ * A wing built from three overlapping rows of feathers on a rounded arm.
+ * Each feather is its own shape with its own gradient and quill line.
+ */
+function buildWing() {
+  const arm = [[156, 128], [186, 90], [226, 62], [268, 46], [300, 40]];
+  const at = (t) => {
+    const f = t * (arm.length - 1);
+    const i = Math.min(arm.length - 2, Math.floor(f));
+    const k = f - i;
+    return [arm[i][0] + (arm[i + 1][0] - arm[i][0]) * k, arm[i][1] + (arm[i + 1][1] - arm[i][1]) * k];
+  };
+  const n = (v) => v.toFixed(1);
+  const leaf = (L, w) => `M0 0 C${n(L * 0.3)} ${n(-w)} ${n(L * 0.82)} ${n(-w * 0.85)} ${n(L)} 0 C${n(L * 0.82)} ${n(w * 0.55)} ${n(L * 0.3)} ${n(w * 0.7)} 0 0 Z`;
+  const row = (count, t0, t1, a0, a1, l0, l1, w, fill) => {
+    let out = "";
+    for (let i = count - 1; i >= 0; i--) {
+      const k = i / (count - 1);
+      const [x, y] = at(t0 + (t1 - t0) * k);
+      const place = `translate(${n(x)} ${n(y)}) rotate(${n(a0 + (a1 - a0) * k)})`;
+      const L = l0 + (l1 - l0) * k;
+      out += `<path d="${leaf(L, w)}" transform="${place}" fill="${fill}" stroke="#8d8676" stroke-width="1" stroke-linejoin="round"/><path d="M5 0 H${n(L * 0.86)}" transform="${place}" fill="none" stroke="#a9a290" stroke-width="0.8" stroke-opacity="0.75"/>`;
+    }
+    return out;
+  };
+  const armPath = "M156 128 Q178 84 226 62 Q268 44 300 40";
+  return `
+${row(9, 0.22, 1, 72, -14, 50, 88, 11, "url(#gp-g-feather) #f4f0e6")}
+${row(8, 0.06, 0.86, 86, 22, 44, 62, 10, "url(#gp-g-feather2) #f7f4ec")}
+${row(7, 0, 0.74, 96, 40, 24, 34, 8.5, "#ffffff")}
+<path d="${armPath}" fill="none" stroke="#8d8676" stroke-width="17" stroke-linecap="round"/>
+<path d="${armPath}" fill="none" stroke="#ece6d8" stroke-width="14.5" stroke-linecap="round"/>
+<path d="M158 122 Q180 82 226 58 Q266 41 298 37" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>`;
+}
+
+const WING = buildWing();
 const WINGS = `<g class="gps-wing gps-wing-r">${WING}</g><g transform="translate(200 0) scale(-1 1)"><g class="gps-wing gps-wing-l">${WING}</g></g>`;
+const WINGS_VIEWBOX = "-200 -24 600 236";
 
 /** A d20 seen face-on. Face shades are mixed from the theme colour in CSS. */
 const D20 = `<svg viewBox="0 0 200 200" aria-hidden="true">
@@ -201,9 +284,20 @@ const D20 = `<svg viewBox="0 0 200 200" aria-hidden="true">
 <polygon class="gps-face f9" points="100,192 152,138 48,138"/><polygon class="gps-face f0" points="100,48 152,138 48,138"/>
 <text x="100" y="118" text-anchor="middle" class="gps-pips">20</text></svg>`;
 
-/** Shared symbols and filters. Lives in the always-mounted stage so references never break. */
+/** Shared gradients, filters and symbols. Lives in the always-mounted stage so references never break. */
 const SHARED_DEFS = `<svg id="grim-pulse-defs" width="0" height="0" aria-hidden="true" style="position:absolute"><defs>
 <filter id="gp-rough" x="-20%" y="-20%" width="140%" height="140%"><feTurbulence type="fractalNoise" baseFrequency="0.085" numOctaves="2" seed="7" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="9" xChannelSelector="R" yChannelSelector="G"/></filter>
+<filter id="gp-blur" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="5"/></filter>
+<filter id="gp-blur-s" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="2"/></filter>
+<linearGradient id="gp-g-bone" x1="0.2" y1="0" x2="0.5" y2="1"><stop offset="0" stop-color="#fffdf6"/><stop offset="0.5" stop-color="#eee4d0"/><stop offset="1" stop-color="#bfae90"/></linearGradient>
+<linearGradient id="gp-g-shade" x1="0" y1="0" x2="1" y2="0.3"><stop offset="0" stop-color="#3a2a1c" stop-opacity="0"/><stop offset="1" stop-color="#3a2a1c" stop-opacity="0.5"/></linearGradient>
+<radialGradient id="gp-g-socket" cx="0.5" cy="0.4" r="0.7"><stop offset="0" stop-color="#000000"/><stop offset="0.7" stop-color="#1a0a0d"/><stop offset="1" stop-color="#40191e"/></radialGradient>
+<linearGradient id="gp-g-tooth" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fffdf5"/><stop offset="1" stop-color="#cdbf9f"/></linearGradient>
+<linearGradient id="gp-g-feather" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffffff"/><stop offset="0.55" stop-color="#f3efe5"/><stop offset="1" stop-color="#c3cad8"/></linearGradient>
+<linearGradient id="gp-g-feather2" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#e3ddcd"/></linearGradient>
+<radialGradient id="gp-g-orb"><stop offset="0" stop-color="#ffffff"/><stop offset="0.25" stop-color="#ffe9a6"/><stop offset="0.55" stop-color="#ffb02e"/><stop offset="1" stop-color="#ff7800" stop-opacity="0"/></radialGradient>
+<linearGradient id="gp-g-glint" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffffff" stop-opacity="0"/><stop offset="0.5" stop-color="#ffffff" stop-opacity="0.95"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></linearGradient>
+<clipPath id="gp-clip-skull"><path d="${SKULL_OUTLINE}"/></clipPath>
 <symbol id="gp-skull-sym" viewBox="14 6 172 192">${SKULL_CORE}</symbol>
 </defs></svg>`;
 
@@ -359,6 +453,8 @@ class Stage {
     this.queue = [];
     this.playing = false;
     this.prompt = null; // { combatantId, node }
+    this.dim = null;
+    this.dimTimer = null;
     this.uid = 0;
   }
 
@@ -478,6 +574,25 @@ class Stage {
     this.prompt = null;
   }
 
+  /**
+   * A light dim while Dice So Nice rolls. It is its own element, layered under the 3D dice,
+   * because the stage itself sits above them and would cover the roll.
+   */
+  showDim() {
+    this.hideDim();
+    const dim = document.createElement("div");
+    dim.id = "grim-pulse-dim";
+    document.body.appendChild(dim);
+    this.dim = dim;
+    this.dimTimer = setTimeout(() => this.hideDim(), DIM_MAX_MS);
+  }
+
+  hideDim() {
+    clearTimeout(this.dimTimer);
+    this.dim?.remove();
+    this.dim = null;
+  }
+
   /* ---------- death save: the result ---------- */
 
   /**
@@ -494,9 +609,21 @@ class Stage {
     let cracks = "";
     for (let i = 0; i < Math.min(3, failure); i++) cracks += CRACKS[i];
 
-    const flames =
-      (litEyes >= 1 ? flame(68, 104, newEye === 1 ? "gps-ignite" : "") : "") +
-      (litEyes >= 2 ? flame(132, 104, newEye === 2 ? "gps-ignite" : "") : "");
+    const eyes =
+      (litEyes >= 1 ? eyeFx(68, 104, newEye === 1 ? "gps-ignite" : "") : "") +
+      (litEyes >= 2 ? eyeFx(132, 104, newEye === 2 ? "gps-ignite" : "") : "");
+
+    // Stable or revived: the skull goes white, a glint crosses it, and sparkles blink around it.
+    let shimmer = "";
+    if (winged) {
+      const stars = Array.from({ length: 12 }, () => {
+        const x = (-170 + Math.random() * 540).toFixed(0);
+        const y = (-10 + Math.random() * 200).toFixed(0);
+        const size = (0.6 + Math.random() * 1.1).toFixed(2);
+        return `<g transform="translate(${x} ${y}) scale(${size})"><path class="gps-star" d="M0 -10 L2.2 -2.2 L10 0 L2.2 2.2 L0 10 L-2.2 2.2 L-10 0 L-2.2 -2.2 Z" fill="#ffffff" style="animation-delay:${(1.2 + Math.random() * 1.8).toFixed(2)}s"/></g>`;
+      }).join("");
+      shimmer = `<g clip-path="url(#gp-clip-skull)"><g transform="skewX(-18)"><rect class="gps-glint" x="-60" y="0" width="70" height="200" fill="url(#gp-g-glint) #ffffff"/></g></g>${stars}`;
+    }
 
     // For the burst, the same skull is drawn once per wedge and each wedge flies off on its own.
     let shards = "";
@@ -529,10 +656,11 @@ class Stage {
       <div class="${classes.join(" ")}">
         <div class="gps-shade"></div>
         <div class="gps-stack">
-          <svg class="gps-skull" viewBox="-150 -6 500 216" aria-hidden="true">
+          <svg class="gps-skull" viewBox="${WINGS_VIEWBOX}" aria-hidden="true">
             <defs>${clips}</defs>
             ${winged ? WINGS : ""}
-            <g class="gps-skull-whole">${SKULL_CORE}${flames}${cracks}</g>
+            <g class="gps-skull-whole">${SKULL_CORE}${eyes}${cracks}</g>
+            ${shimmer}
             ${shards}
           </svg>
           <div class="gps-caption"><div class="gps-title">${esc(name)}</div><div class="gps-sub">${esc(caption)}</div></div>
@@ -763,11 +891,18 @@ class GrimPulse {
           if (names.length) this.stage.slain(names, String(group.line ?? ""), group.tone);
         }
         break;
+      case "deathRolling":
+        // The die was clicked: clear the screen so the Dice So Nice roll is seen by everyone.
+        this.stage.closeDeathPrompt();
+        if (hasDice3d()) this.stage.showDim();
+        break;
       case "deathClose":
         this.stage.closeDeathPrompt();
+        this.stage.hideDim();
         break;
       case "deathResult":
         this.stage.closeDeathPrompt();
+        this.stage.hideDim();
         this.stage.deathResult({
           name: String(data.name ?? ""),
           kind: ["success", "fail", "revive"].includes(data.kind) ? data.kind : "fail",
@@ -799,7 +934,14 @@ class GrimPulse {
     const state = () => ({ ...readDeath(actor), hp: readHp(actor)?.value ?? 0 });
     const before = state();
 
-    this.send({ type: "deathClose" });
+    this.send({ type: "deathRolling" });
+
+    // Catch the chat message this roll creates, so we know which Dice So Nice animation to wait for.
+    let messageId = null;
+    const hookId = Hooks.on("createChatMessage", (message) => {
+      const author = message.author ?? message.user;
+      if (!messageId && author?.id === game.user.id && message.rolls?.length) messageId = message.id;
+    });
 
     let result;
     try {
@@ -807,10 +949,19 @@ class GrimPulse {
     } catch (err) {
       console.error(`${MODULE_ID} | death save failed`, err);
       ui.notifications.error(loc("Warn.DeathSave"));
+      this.send({ type: "deathClose" });
       return;
+    } finally {
+      Hooks.off("createChatMessage", hookId);
     }
     const roll = Array.isArray(result) ? result[0] : result;
-    if (!roll) return; // cancelled
+    if (!roll) {
+      this.send({ type: "deathClose" }); // cancelled
+      return;
+    }
+
+    // Let the 3D die land before the skull gives the result away.
+    await waitForDice(messageId);
 
     // The system has already written the outcome to the actor: read it back rather than re-deriving the rules.
     const after = state();
@@ -862,6 +1013,7 @@ class GrimPulse {
 
   onCombatDelete(combat) {
     this.stage.closeDeathPrompt();
+    this.stage.hideDim();
     this.rounds.delete(combat.id);
     if ((combat.round ?? 0) > 0 && getSetting("encounterEnd")) this.stage.encounterEnd();
     this.schedule();
@@ -990,7 +1142,7 @@ class GrimPulse {
       healHTML = `<div class="gp-heal" style="animation-delay:${-heal.elapsed}ms"></div>${pluses}${amount}`;
     }
     const wingsHTML = revive
-      ? `<svg class="gp-wings" viewBox="-150 -6 500 216" aria-hidden="true" style="--gp-fx-delay:${-revive.elapsed}ms">${WINGS.replaceAll("gps-wing", "gp-wing")}</svg>`
+      ? `<svg class="gp-wings" viewBox="${WINGS_VIEWBOX}" aria-hidden="true" style="--gp-fx-delay:${-revive.elapsed}ms">${WINGS.replaceAll("gps-wing", "gp-wing")}</svg>`
       : "";
 
     const classes = ["gp-row", active ? "gp-active" : "gp-queued"];
