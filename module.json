@@ -2,7 +2,7 @@
   "id": "grim-pulse",
   "title": "Grim Pulse - Combat Turn Tracker",
   "description": "A dark-fantasy turn order strip for Foundry VTT. Layered turn frames with an HP bar and heartbeat line, condition chips, disposition marks, a death save die, and full-screen Round, Reaction, death and Encounter End announcements.",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "authors": [
     {
       "name": "DM Bank"
@@ -27,7 +27,7 @@
   ],
   "url": "https://github.com/NuttoSGXX/Grim_Pulse",
   "manifest": "https://github.com/NuttoSGXX/Grim_Pulse/releases/latest/download/module.json",
-  "download": "https://github.com/NuttoSGXX/Grim_Pulse/releases/download/v0.2.2/module.zip",
+  "download": "https://github.com/NuttoSGXX/Grim_Pulse/releases/download/v0.2.3/module.zip",
   "socket": true,
   "relationships": {
     "recommends": [

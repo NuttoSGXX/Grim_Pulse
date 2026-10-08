@@ -52,4 +52,4 @@ All lines live in the `PHRASES` block at the top of `scripts/main.js`: `reaction
 https://github.com/NuttoSGXX/Grim_Pulse/releases/latest/download/module.json
 ```
 
-For a release, attach `module.json` and `module.zip` to a GitHub Release tagged `v0.2.2`.
+For a release, attach `module.json` and `module.zip` to a GitHub Release tagged `v0.2.3`.
