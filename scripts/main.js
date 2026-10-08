@@ -1,19 +1,72 @@
 /**
- * Grim Pulse - Combat Turn Tracker
+ * Grim Pulse - Combat Turn Tracker  (v0.2.0)
  * Foundry VTT V13 / V14, written against the dnd5e system.
  *
- * The strip is a plain DOM element driven by Foundry's own Combat document.
- * It never keeps its own turn order: every render reads game.combat again.
+ * Two DOM roots, both plain elements:
+ *   #grim-pulse        the draggable turn strip
+ *   #grim-pulse-stage  full-screen layer for banners, the death save die and its result
+ *
+ * The strip never keeps its own turn order: every render reads game.combat again.
+ * Anything every player must see at the same moment (Reaction, death announcements,
+ * death save results) travels over the module socket.
  */
 
 const MODULE_ID = "grim-pulse";
+const SOCKET = `module.${MODULE_ID}`;
 const DEFAULT_POSITION = { left: 130, top: 90 };
-const BEAT_WIDTH = 120; // px width of one heartbeat in the ECG line. Keep in sync with the CSS keyframes.
+const BEAT_WIDTH = 120; // px width of one heartbeat. Keep in sync with @keyframes gp-ecg.
 const ECG_BEATS = 4;
 const ACTIVE_STATUS_LIMIT = 6;
 const QUEUED_STATUS_LIMIT = 4;
-const BANNER_MS = 2600;
+const STATUS_WRAP_AT = 10; // characters per line before the next word drops to a new line
 const MYSTERY_IMG = "icons/svg/mystery-man.svg";
+const HEAL_MS = 1700;
+const REVIVE_MS = 2800;
+
+/* ------------------------------------------------------------------ */
+/*  Flavour lines. Edit freely: one is picked at random each time.     */
+/* ------------------------------------------------------------------ */
+
+const PHRASES = {
+  /** Under a character's name when the Reaction button is pressed. */
+  reaction: [
+    "But in that very instant...",
+    "Not so fast...",
+    "Before the blow could land...",
+    "In the blink of an eye...",
+    "But fate had other plans...",
+    "Quicker than thought..."
+  ],
+  /** Under a player character's name after the third failed death save. */
+  fallen: [
+    "Returns to the embrace of the gods.",
+    "Walks now among the stars.",
+    "Has gone where no blade can follow.",
+    "Rests, their story ended.",
+    "Answers the final call.",
+    "Passes beyond the veil."
+  ],
+  /** Skull button, hostile tokens. Harsh on purpose. */
+  slainHostile: [
+    "No second chances.",
+    "Cut down without mercy.",
+    "Slain where they stood.",
+    "Sent screaming into the dark.",
+    "Dead, and not coming back.",
+    "Nothing left but the body."
+  ],
+  /** Skull button, neutral, secret and friendly tokens. */
+  slainOther: [
+    "The light fades from their eyes.",
+    "Gone before their story was told.",
+    "Fallen, with secrets unspoken.",
+    "Silence takes them.",
+    "Lost to the dark.",
+    "No one will know what they wanted."
+  ]
+};
+
+const pick = (list) => list[Math.floor(Math.random() * list.length)];
 
 const DISPOSITION = new Map([
   [-2, "secret"],
@@ -36,6 +89,28 @@ const loc = (key, data) =>
 
 const isVideo = (src) => /\.(webm|mp4|m4v|ogv)(\?|$)/i.test(src ?? "");
 
+const reducedMotion = () => Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+
+/** "Concentrating: Haste" becomes two lines: a word moves down once the line would pass STATUS_WRAP_AT. */
+function wrapStatus(name) {
+  const lines = [];
+  let line = "";
+  for (const word of String(name).split(/\s+/).filter(Boolean)) {
+    if (line && `${line} ${word}`.length > STATUS_WRAP_AT) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  }
+  if (line) lines.push(line);
+  return lines.map(esc).join("<br>");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Art: heartbeat, frames, blood, skull, wings, die                   */
+/* ------------------------------------------------------------------ */
+
 function ecgPath() {
   let d = "M0 20";
   for (let i = 0; i < ECG_BEATS; i++) {
@@ -49,7 +124,32 @@ const ECG_WIDTH = BEAT_WIDTH * ECG_BEATS;
 const ECG_LIVE = `<div class="gp-ecg"><svg width="${ECG_WIDTH}" viewBox="0 0 ${ECG_WIDTH} 40" preserveAspectRatio="none" aria-hidden="true"><path d="${ecgPath()}"/></svg></div>`;
 const ECG_FLAT = `<div class="gp-ecg gp-ecg-flat"><svg width="${ECG_WIDTH}" viewBox="0 0 ${ECG_WIDTH} 40" preserveAspectRatio="none" aria-hidden="true"><path d="M0 20 H${ECG_WIDTH}"/></svg></div>`;
 
-/** Five splatter groups. Group b1 appears under 50% HP, one more for every further 10% lost. */
+/** Layered frame for the active turn: outer line, inner line, portrait divider, diamonds. 276 x 100. */
+const FRAME_ACTIVE = `<svg class="gp-frame" viewBox="0 0 276 100" aria-hidden="true">
+<polygon class="gp-f-out" points="11,1 265,1 275,11 275,89 265,99 11,99 1,89 1,11"/>
+<polygon class="gp-f-temp" pathLength="100" points="11,1 265,1 275,11 275,89 265,99 11,99 1,89 1,11"/>
+<polygon class="gp-f-in" points="12.5,5 263.5,5 271,12.5 271,87.5 263.5,95 12.5,95 5,87.5 5,12.5"/>
+<path class="gp-f-out" d="M101.5 1 V99"/><path class="gp-f-in" d="M105 5 V95"/>
+<path class="gp-f-dia" d="M101.5 43.5 l6.5 6.5 -6.5 6.5 -6.5 -6.5 Z"/>
+<path class="gp-f-dia" d="M188 -3.5 l4.5 4.5 -4.5 4.5 -4.5 -4.5 Z M188 94.5 l4.5 4.5 -4.5 4.5 -4.5 -4.5 Z"/>
+</svg>`;
+
+/** Layered frame for a queued turn: pointed right end, inner line, one diamond. 200 x 46. */
+const FRAME_QUEUED = `<svg class="gp-frame" viewBox="0 0 200 46" aria-hidden="true">
+<polygon class="gp-f-out" points="1,1 187,1 199,23 187,45 1,45"/>
+<polygon class="gp-f-temp" pathLength="100" points="1,1 187,1 199,23 187,45 1,45"/>
+<polygon class="gp-f-in" points="4.5,4.5 185,4.5 194.5,23 185,41.5 4.5,41.5"/>
+<path class="gp-f-dia" d="M189 19.5 l3.5 3.5 -3.5 3.5 -3.5 -3.5 Z"/>
+</svg>`;
+
+/** Hexagonal plate behind "Round N". 190 x 40. */
+const FRAME_PLATE = `<svg class="gp-frame" viewBox="0 0 190 40" aria-hidden="true">
+<polygon class="gp-f-out" points="14,1 176,1 189,20 176,39 14,39 1,20"/>
+<polygon class="gp-f-in" points="16,5 174,5 183.5,20 174,35 16,35 6.5,20"/>
+<path class="gp-f-dia" d="M25 15.5 l4.5 4.5 -4.5 4.5 -4.5 -4.5 Z M165 15.5 l4.5 4.5 -4.5 4.5 -4.5 -4.5 Z"/>
+</svg>`;
+
+/** Five splatter groups. b1 appears under 50% HP, one more for every further 10% lost. */
 const BLOOD_SVG = `<svg class="gp-blood" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><g filter="url(#gp-rough)">
 <g class="gp-b1"><circle cx="8" cy="10" r="10"/><circle cx="21" cy="6" r="3"/><circle cx="5" cy="26" r="3.5"/><circle cx="25" cy="19" r="2"/><rect x="7" y="14" width="3.2" height="24" rx="1.6"/></g>
 <g class="gp-b2"><circle cx="91" cy="89" r="12"/><circle cx="76" cy="95" r="4"/><circle cx="97" cy="72" r="3"/><circle cx="81" cy="77" r="2"/></g>
@@ -58,10 +158,56 @@ const BLOOD_SVG = `<svg class="gp-blood" viewBox="0 0 100 100" preserveAspectRat
 <g class="gp-b5"><ellipse cx="50" cy="97" rx="30" ry="8"/><circle cx="40" cy="84" r="3"/><circle cx="52" cy="3" r="8"/><rect x="50" y="5" width="3.2" height="24" rx="1.6"/><circle cx="64" cy="11" r="3.5"/><circle cx="35" cy="9" r="2.5"/></g>
 </g></svg>`;
 
-/** One shared filter that roughens the blood shapes so they do not read as clean circles. */
+/**
+ * The skull. Every shape carries its own fill and stroke attributes so nothing
+ * depends on inherited CSS (which is what turns inline art solid black).
+ */
+const SKULL_CORE = `
+<path d="M100 14 C48 14 22 50 22 96 C22 124 34 142 50 152 L54 180 Q56 190 66 190 L134 190 Q144 190 146 180 L150 152 C166 142 178 124 178 96 C178 50 152 14 100 14 Z" fill="#e6dccb" stroke="#1b0a0c" stroke-width="4" stroke-linejoin="round"/>
+<path d="M100 22 C58 22 33 52 30 90 C44 58 70 40 104 36 Z" fill="#ffffff" fill-opacity="0.4" stroke="none"/>
+<path d="M150 152 C166 142 178 124 178 96 C178 80 174 64 168 52 C170 92 160 130 138 150 L134 188 Q144 188 146 180 Z" fill="#000000" fill-opacity="0.22" stroke="none"/>
+<ellipse cx="68" cy="104" rx="22" ry="24" fill="#14070a" stroke="none"/>
+<ellipse cx="132" cy="104" rx="22" ry="24" fill="#14070a" stroke="none"/>
+<path d="M100 126 L88 150 Q100 157 112 150 Z" fill="#14070a" stroke="none"/>
+<path d="M62 168 H138 M78 168 V189 M89 168 V190 M100 168 V190 M111 168 V190 M122 168 V189" fill="none" stroke="#1b0a0c" stroke-width="3" stroke-linecap="round"/>`;
+
+const flame = (cx, cy, cls) => `
+<g class="gps-flame ${cls}">
+<path d="M${cx} ${cy + 17} C${cx - 17} ${cy + 11} ${cx - 11} ${cy - 5} ${cx - 3} ${cy - 20} C${cx - 1} ${cy - 9} ${cx + 7} ${cy - 9} ${cx + 5} ${cy - 22} C${cx + 18} ${cy - 8} ${cx + 17} ${cy + 11} ${cx} ${cy + 17} Z" fill="#ffc94d" stroke="#fff3c9" stroke-width="1.5"/>
+<path d="M${cx} ${cy + 14} C${cx - 8} ${cy + 10} ${cx - 6} ${cy} ${cx} ${cy - 8} C${cx + 6} ${cy} ${cx + 8} ${cy + 10} ${cx} ${cy + 14} Z" fill="#ffffff" stroke="none"/>
+</g>`;
+
+const CRACKS = [
+  // first failure
+  `<path class="gps-crack gps-crack-1" pathLength="1" d="M112 15 L104 40 L116 58 L100 78 L108 96 M104 40 L88 52" fill="none" stroke="#1b0a0c" stroke-width="3.5" stroke-linejoin="miter"/>`,
+  // second failure
+  `<path class="gps-crack gps-crack-2" pathLength="1" d="M108 96 L96 122 L104 142 M116 58 L140 50 L152 64 M24 86 L44 78 L40 62 L58 50 M100 78 L84 84" fill="none" stroke="#1b0a0c" stroke-width="3.5" stroke-linejoin="miter"/>`,
+  // third failure, just before it bursts
+  `<path class="gps-crack gps-crack-3" pathLength="1" d="M104 142 L92 160 L100 176 M152 64 L172 70 M58 50 L70 30 M44 78 L52 100 M140 50 L146 32 M176 110 L156 122 L160 144" fill="none" stroke="#1b0a0c" stroke-width="3.5" stroke-linejoin="miter"/>`
+];
+
+const WING_PATH = "M168 122 C198 60 258 28 332 22 C324 48 320 58 302 68 C318 70 322 78 314 92 C302 96 298 100 286 104 C294 110 292 118 282 128 C264 132 252 134 242 136 C246 144 240 152 228 156 C206 158 188 150 168 142 Z";
+const WING = `
+<path d="${WING_PATH}" fill="#f6f1e4" stroke="#d8b65a" stroke-width="2.5" stroke-linejoin="round"/>
+<path d="M186 132 C222 108 264 76 314 42 M192 142 C228 128 262 112 300 86 M200 148 C226 142 250 136 274 124" fill="none" stroke="#d8b65a" stroke-width="1.6" stroke-linecap="round" stroke-opacity="0.8"/>`;
+const WINGS = `<g class="gps-wing gps-wing-r">${WING}</g><g transform="translate(200 0) scale(-1 1)"><g class="gps-wing gps-wing-l">${WING}</g></g>`;
+
+/** A d20 seen face-on. Face shades are mixed from the theme colour in CSS. */
+const D20 = `<svg viewBox="0 0 200 200" aria-hidden="true">
+<polygon class="gps-face f1" points="100,8 20,54 100,48"/><polygon class="gps-face f2" points="100,8 180,54 100,48"/>
+<polygon class="gps-face f3" points="20,54 48,138 100,48"/><polygon class="gps-face f4" points="180,54 152,138 100,48"/>
+<polygon class="gps-face f5" points="20,54 20,146 48,138"/><polygon class="gps-face f6" points="180,54 180,146 152,138"/>
+<polygon class="gps-face f7" points="20,146 100,192 48,138"/><polygon class="gps-face f8" points="180,146 100,192 152,138"/>
+<polygon class="gps-face f9" points="100,192 152,138 48,138"/><polygon class="gps-face f0" points="100,48 152,138 48,138"/>
+<text x="100" y="118" text-anchor="middle" class="gps-pips">20</text></svg>`;
+
+/** Shared symbols and filters. Lives in the always-mounted stage so references never break. */
 const SHARED_DEFS = `<svg id="grim-pulse-defs" width="0" height="0" aria-hidden="true" style="position:absolute"><defs>
 <filter id="gp-rough" x="-20%" y="-20%" width="140%" height="140%"><feTurbulence type="fractalNoise" baseFrequency="0.085" numOctaves="2" seed="7" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="9" xChannelSelector="R" yChannelSelector="G"/></filter>
+<symbol id="gp-skull-sym" viewBox="14 6 172 192">${SKULL_CORE}</symbol>
 </defs></svg>`;
+
+const SKULL_ICON = `<svg class="gp-skullicon" viewBox="14 6 172 192" aria-hidden="true"><use href="#gp-skull-sym"/></svg>`;
 
 /* ------------------------------------------------------------------ */
 /*  Reading the combatant                                              */
@@ -81,6 +227,46 @@ function readAc(actor) {
   const ac = actor?.system?.attributes?.ac;
   const value = typeof ac === "object" ? ac?.value : ac;
   return Number.isFinite(Number(value)) && value !== null && value !== "" ? Number(value) : null;
+}
+
+function readDeath(actor) {
+  const death = actor?.system?.attributes?.death ?? {};
+  return { success: Number(death.success ?? 0), failure: Number(death.failure ?? 0) };
+}
+
+const isPlayerCharacter = (actor) => actor?.type === "character";
+
+function isStable(actor) {
+  if (actor?.statuses?.has?.("stable")) return true;
+  const death = readDeath(actor);
+  return Boolean(actor?.getFlag?.(MODULE_ID, "stable")) && death.failure === 0;
+}
+
+/** dead = out of the fight for good. A player character at 0 HP is dying, not dead, until the third failure. */
+function isDead(combatant) {
+  const actor = combatant.actor;
+  if (combatant.isDefeated || actor?.statuses?.has?.("dead")) return true;
+  const hp = readHp(actor);
+  if (!hp || hp.value > 0) return false;
+  return isPlayerCharacter(actor) ? readDeath(actor).failure >= 3 : true;
+}
+
+/** A turn the End turn button jumps over: any non-player combatant at 0 HP. */
+function isSkippable(combatant) {
+  const actor = combatant?.actor;
+  if (!actor || isPlayerCharacter(actor) || actor.hasPlayerOwner) return false;
+  const hp = readHp(actor);
+  return Boolean(combatant.isDefeated) || Boolean(hp && hp.value <= 0);
+}
+
+/** Does this combatant owe a death saving throw at the start of its turn? */
+function needsDeathSave(combatant) {
+  const actor = combatant?.actor;
+  if (!actor || !isPlayerCharacter(actor) || combatant.isDefeated) return false;
+  const hp = readHp(actor);
+  if (!hp || hp.value > 0) return false;
+  if (actor.statuses?.has?.("dead") || readDeath(actor).failure >= 3) return false;
+  return !isStable(actor);
 }
 
 /**
@@ -129,7 +315,7 @@ function describe(entry) {
     return {
       id: combatant.id, name: loc("Unknown"), img: MYSTERY_IMG, dispo: "unknown",
       hp: null, ac: null, init: null, showNumbers: false, statuses: [],
-      dead: false, blood: 0, beat: 1.4, amp: 0.6, canEndTurn: false
+      dead: false, dying: false, stable: false, death: null, blood: 0, beat: 1.4, amp: 0.6, temp: false
     };
   }
 
@@ -138,7 +324,8 @@ function describe(entry) {
   const secret = dispo === "secret" && !isGM && !combatant.isOwner;
   const hp = readHp(actor);
   const pct = hp ? hp.pct : 1;
-  const dead = Boolean(combatant.isDefeated) || (hp ? hp.value <= 0 : false);
+  const dead = isDead(combatant);
+  const dying = !dead && Boolean(hp && hp.value <= 0);
   const showNumbers = isGM || getSetting("playerNumbers") === "all" || Boolean(actor?.hasPlayerOwner);
 
   return {
@@ -152,11 +339,206 @@ function describe(entry) {
     showNumbers,
     statuses: readStatuses(actor),
     dead,
-    blood: dead ? 5 : bloodLevel(pct),
+    dying,
+    stable: dying && isStable(actor),
+    death: dying && isPlayerCharacter(actor) ? readDeath(actor) : null,
+    blood: dead || dying ? 5 : bloodLevel(pct),
     beat: (1 + (1 - pct) * 2).toFixed(2), // seconds per heartbeat: 1s at full HP, 3s near death
     amp: (0.25 + 0.75 * pct).toFixed(2), // heartbeat height: full at full HP, a quarter near death
-    canEndTurn: !isGM && combatant.isOwner
+    temp: Boolean(hp?.temp)
   };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Stage: banners, announcements, the death save die and its result   */
+/* ------------------------------------------------------------------ */
+
+class Stage {
+  constructor() {
+    this.el = null;
+    this.queue = [];
+    this.playing = false;
+    this.prompt = null; // { combatantId, node }
+    this.uid = 0;
+  }
+
+  mount() {
+    const el = document.createElement("div");
+    el.id = "grim-pulse-stage";
+    el.innerHTML = SHARED_DEFS;
+    document.body.appendChild(el);
+    this.el = el;
+    this.applyTheme();
+  }
+
+  applyTheme() {
+    this.el.dataset.theme = getSetting("theme");
+  }
+
+  /** Scenes play one after another so two announcements never cover each other. */
+  play(html, duration) {
+    this.queue.push({ html, duration });
+    if (!this.playing) this.#next();
+  }
+
+  #next() {
+    const scene = this.queue.shift();
+    if (!scene) {
+      this.playing = false;
+      return;
+    }
+    this.playing = true;
+    const node = document.createElement("div");
+    node.className = "gps-layer";
+    node.innerHTML = scene.html;
+    this.el.appendChild(node);
+    setTimeout(() => {
+      node.remove();
+      this.#next();
+    }, scene.duration);
+  }
+
+  /* ---------- simple text scenes ---------- */
+
+  round(n) {
+    const sparks = Array.from({ length: 16 }, () => {
+      const size = (8 + Math.random() * 14).toFixed(0);
+      return `<i class="gps-spark" style="left:${(18 + Math.random() * 64).toFixed(1)}%;top:${(-15 + Math.random() * 130).toFixed(1)}%;width:${size}px;height:${size}px;animation-delay:${(0.45 + Math.random() * 1.1).toFixed(2)}s"></i>`;
+    }).join("");
+    this.play(`
+      <div class="gps-scene gps-round">
+        <div class="gps-shade"></div>
+        <div class="gps-band"><div class="gps-rule"></div><div class="gps-title">${esc(loc("Round", { n }))}</div><div class="gps-rule"></div>${sparks}</div>
+      </div>`, 2600);
+  }
+
+  reaction(name, line) {
+    this.play(`
+      <div class="gps-scene gps-reaction">
+        <div class="gps-shade"></div>
+        <div class="gps-streak"></div>
+        <div class="gps-stack"><div class="gps-title">${esc(name)}</div><div class="gps-sub">${esc(line)}</div></div>
+      </div>`, 2800);
+  }
+
+  slain(names, line, tone) {
+    this.play(`
+      <div class="gps-scene gps-slain" data-tone="${tone === "hostile" ? "hostile" : "other"}">
+        <div class="gps-shade"></div>
+        <div class="gps-stack">
+          <svg class="gps-skull-small" viewBox="14 6 172 192" aria-hidden="true"><use href="#gp-skull-sym"/></svg>
+          <div class="gps-title">${names.map(esc).join("<br>")}</div>
+          <div class="gps-rule"></div>
+          <div class="gps-sub">${esc(line)}</div>
+        </div>
+      </div>`, 3600);
+  }
+
+  encounterEnd() {
+    this.play(`
+      <div class="gps-scene gps-end">
+        <div class="gps-shade"></div>
+        <div class="gps-stack"><div class="gps-rule"></div><div class="gps-title">${esc(loc("EncounterEnd"))}</div><div class="gps-rule"></div></div>
+      </div>`, 5600);
+  }
+
+  /* ---------- death save: the die ---------- */
+
+  openDeathPrompt(combatant, onRoll) {
+    this.closeDeathPrompt();
+    const canRoll = Boolean(combatant.actor?.isOwner);
+    const node = document.createElement("div");
+    node.className = "gps-layer gps-prompt";
+    node.innerHTML = `
+      <div class="gps-shade"></div>
+      <div class="gps-stack">
+        <div class="gps-title">${esc(combatant.name)}</div>
+        <div class="gps-sub">${esc(loc("Death.Title"))}</div>
+        <button type="button" class="gps-die" ${canRoll ? "" : "disabled"} aria-label="${esc(loc("Death.Roll"))}">${D20}</button>
+        <div class="gps-hint">${esc(loc(canRoll ? "Death.Roll" : "Death.Wait"))}</div>
+        <button type="button" class="gps-hide">${esc(loc("Death.Hide"))}</button>
+      </div>`;
+    this.el.appendChild(node);
+    this.prompt = { combatantId: combatant.id, node };
+
+    node.querySelector(".gps-hide").addEventListener("click", () => this.closeDeathPrompt());
+    if (canRoll) {
+      const die = node.querySelector(".gps-die");
+      die.addEventListener("click", () => {
+        if (die.disabled) return;
+        die.disabled = true;
+        die.classList.add("gps-rolling");
+        setTimeout(() => onRoll(combatant.id), reducedMotion() ? 0 : 650);
+      }, { once: true });
+    }
+  }
+
+  closeDeathPrompt() {
+    this.prompt?.node.remove();
+    this.prompt = null;
+  }
+
+  /* ---------- death save: the result ---------- */
+
+  /**
+   * kind: "success" | "fail" | "revive"
+   * success / failure: the totals after this roll (0-3)
+   */
+  deathResult({ name, kind, success, failure, line }) {
+    const id = `gps-clip-${++this.uid}`;
+    const burst = kind === "fail" && failure >= 3;
+    const winged = kind === "revive" || (kind === "success" && success >= 3);
+    const litEyes = winged ? 2 : Math.min(2, success);
+    const newEye = kind === "success" && success <= 2 ? success : 0; // which eye lights up now
+
+    let cracks = "";
+    for (let i = 0; i < Math.min(3, failure); i++) cracks += CRACKS[i];
+
+    const flames =
+      (litEyes >= 1 ? flame(68, 104, newEye === 1 ? "gps-ignite" : "") : "") +
+      (litEyes >= 2 ? flame(132, 104, newEye === 2 ? "gps-ignite" : "") : "");
+
+    // For the burst, the same skull is drawn once per wedge and each wedge flies off on its own.
+    let shards = "";
+    let clips = "";
+    if (burst) {
+      const wedges = 10;
+      for (let i = 0; i < wedges; i++) {
+        const a0 = (i / wedges) * Math.PI * 2;
+        const a1 = ((i + 1) / wedges) * Math.PI * 2;
+        const mid = (a0 + a1) / 2;
+        const p = (a) => `${(100 + Math.cos(a) * 260).toFixed(1)},${(104 + Math.sin(a) * 260).toFixed(1)}`;
+        const dist = 150 + Math.random() * 130;
+        clips += `<clipPath id="${id}-${i}"><polygon points="100,104 ${p(a0)} ${p(a1)}"/></clipPath>`;
+        shards += `<g class="gps-shard" clip-path="url(#${id}-${i})" style="--dx:${(Math.cos(mid) * dist).toFixed(0)}px;--dy:${(Math.sin(mid) * dist).toFixed(0)}px;--rot:${((Math.random() - 0.5) * 220).toFixed(0)}deg">${SKULL_CORE}${cracks}</g>`;
+      }
+    }
+
+    let caption;
+    if (kind === "revive") caption = loc("Death.Revive");
+    else if (burst) caption = line;
+    else if (kind === "success") caption = success >= 3 ? loc("Death.Stable") : loc("Death.Success", { n: success });
+    else caption = loc("Death.Failure", { n: failure });
+
+    const classes = ["gps-scene", "gps-death", `gps-${kind}`];
+    if (burst) classes.push("gps-burst");
+    if (winged) classes.push("gps-winged");
+    if (kind === "fail") classes.push(`gps-newcrack-${Math.min(3, failure)}`);
+
+    this.play(`
+      <div class="${classes.join(" ")}">
+        <div class="gps-shade"></div>
+        <div class="gps-stack">
+          <svg class="gps-skull" viewBox="-150 -6 500 216" aria-hidden="true">
+            <defs>${clips}</defs>
+            ${winged ? WINGS : ""}
+            <g class="gps-skull-whole">${SKULL_CORE}${flames}${cracks}</g>
+            ${shards}
+          </svg>
+          <div class="gps-caption"><div class="gps-title">${esc(name)}</div><div class="gps-sub">${esc(caption)}</div></div>
+        </div>
+      </div>`, burst ? 5600 : winged ? 4200 : 3400);
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -164,31 +546,35 @@ function describe(entry) {
 /* ------------------------------------------------------------------ */
 
 class GrimPulse {
-  constructor() {
+  constructor(stage) {
+    this.stage = stage;
     this.el = null;
     this.list = null;
     this.timer = null;
-    this.rounds = new Map();
+    this.rounds = new Map(); // combat id -> last round seen
+    this.hpSeen = new Map(); // combatant id -> last HP value seen
+    this.barSeen = new Map(); // combatant id -> last bar width drawn (0-100)
+    this.fx = new Map(); // combatant id -> [{ kind, amount, start }]
   }
 
   mount() {
-    if (!document.getElementById("grim-pulse-defs")) document.body.insertAdjacentHTML("beforeend", SHARED_DEFS);
-
     const el = document.createElement("section");
     el.id = "grim-pulse";
     el.hidden = true;
-    const gmButtons = game.user.isGM
-      ? `<button type="button" data-action="prev" data-tooltip="${esc(loc("PrevTurn"))}" aria-label="${esc(loc("PrevTurn"))}"><i class="fa-solid fa-chevron-up"></i></button>
-         <button type="button" data-action="next" data-tooltip="${esc(loc("NextTurn"))}" aria-label="${esc(loc("NextTurn"))}"><i class="fa-solid fa-chevron-down"></i></button>`
+    const slainButton = game.user.isGM
+      ? `<button type="button" class="gp-btn gp-btn-icon" data-action="slain" data-tooltip="${esc(loc("SlainHint"))}" aria-label="${esc(loc("SlainHint"))}">${SKULL_ICON}</button>`
       : "";
     el.innerHTML = `
-      <header class="gp-handle" data-tooltip="${esc(loc("HandleHint"))}">
-        <i class="fa-solid fa-grip-vertical gp-grip"></i>
-        <span class="gp-round"></span>
-        <span class="gp-turn"></span>
-        ${gmButtons}
+      <header class="gp-head" data-tooltip="${esc(loc("HandleHint"))}">
+        <div class="gp-plate">${FRAME_PLATE}<span class="gp-round"></span></div>
+        <div class="gp-tab"><span class="gp-turn"></span></div>
       </header>
-      <ol class="gp-list"></ol>`;
+      <ol class="gp-list"></ol>
+      <footer class="gp-foot">
+        <button type="button" class="gp-btn gp-btn-main" data-action="end-turn"><i class="fa-solid fa-forward-step"></i><span>${esc(loc("EndTurn"))}</span></button>
+        <button type="button" class="gp-btn" data-action="reaction"><i class="fa-solid fa-bolt"></i><span>${esc(loc("Reaction"))}</span></button>
+        ${slainButton}
+      </footer>`;
     document.body.appendChild(el);
 
     this.el = el;
@@ -196,8 +582,9 @@ class GrimPulse {
     this.applyTheme();
     this.applyScale();
     this.applyPosition(getSetting("position"));
-    this.#bindDrag(el.querySelector(".gp-handle"));
+    this.#bindDrag(el.querySelector(".gp-head"));
     this.#bindList();
+    this.#bindFoot(el.querySelector(".gp-foot"));
     window.addEventListener("resize", () => this.applyPosition(getSetting("position")));
 
     for (const combat of game.combats ?? []) this.rounds.set(combat.id, combat.round ?? 0);
@@ -208,6 +595,7 @@ class GrimPulse {
 
   applyTheme() {
     this.el.dataset.theme = getSetting("theme");
+    this.stage.applyTheme();
   }
 
   applyScale() {
@@ -229,7 +617,7 @@ class GrimPulse {
     let start = null;
 
     handle.addEventListener("pointerdown", (ev) => {
-      if (ev.button !== 0 || ev.target.closest("button")) return;
+      if (ev.button !== 0) return;
       const rect = this.el.getBoundingClientRect();
       start = { dx: ev.clientX - rect.left, dy: ev.clientY - rect.top };
       handle.setPointerCapture(ev.pointerId);
@@ -254,16 +642,9 @@ class GrimPulse {
     handle.addEventListener("pointerup", finish);
     handle.addEventListener("pointercancel", finish);
 
-    handle.addEventListener("dblclick", (ev) => {
-      if (ev.target.closest("button")) return;
+    handle.addEventListener("dblclick", () => {
       this.applyPosition(DEFAULT_POSITION);
       game.settings.set(MODULE_ID, "position", { ...DEFAULT_POSITION });
-    });
-
-    handle.addEventListener("click", (ev) => {
-      const action = ev.target.closest("button")?.dataset.action;
-      if (action === "prev") game.combat?.previousTurn();
-      if (action === "next") game.combat?.nextTurn();
     });
   }
 
@@ -277,10 +658,6 @@ class GrimPulse {
 
   #bindList() {
     this.list.addEventListener("click", (ev) => {
-      if (ev.target.closest('[data-action="end-turn"]')) {
-        game.combat?.nextTurn();
-        return;
-      }
       if (!ev.target.closest(".gp-card")) return;
       const token = this.#tokenFor(ev.target);
       if (!token) return;
@@ -301,6 +678,221 @@ class GrimPulse {
         this.#tokenFor(ev.target)?._onHoverOut?.(ev);
       } catch (err) { /* highlight is cosmetic */ }
     });
+  }
+
+  #bindFoot(foot) {
+    foot.addEventListener("click", (ev) => {
+      const action = ev.target.closest("button")?.dataset.action;
+      if (action === "end-turn") this.endTurn();
+      if (action === "reaction") this.announceReaction();
+      if (action === "slain") this.announceSlain();
+    });
+  }
+
+  /* ---------- the three buttons ---------- */
+
+  async endTurn() {
+    const combat = game.combat;
+    if (!combat?.started) return;
+    if (game.user.isGM) {
+      await combat.nextTurn();
+      await this.skipDead(combat);
+      return;
+    }
+    if (!combat.combatant?.isOwner) return;
+    await combat.nextTurn();
+    // A player may only end their own turn, so the GM's client does the skipping.
+    if (getSetting("skipDead")) game.socket.emit(SOCKET, { type: "skipDead", combatId: combat.id });
+  }
+
+  /** GM only: keep stepping while the turn belongs to a non-player combatant at 0 HP. */
+  async skipDead(combat) {
+    if (!getSetting("skipDead") || !game.user.isGM || !combat?.started) return;
+    let guard = combat.turns.length;
+    while (guard-- > 0 && isSkippable(combat.combatant)) await combat.nextTurn();
+  }
+
+  announceReaction() {
+    const controlled = canvas.tokens?.controlled ?? [];
+    const name = controlled[0]?.document?.name ?? game.user.character?.name ?? (game.user.isGM ? null : game.user.name);
+    if (!name) {
+      ui.notifications.warn(loc("Warn.SelectToken"));
+      return;
+    }
+    this.send({ type: "reaction", name, line: pick(PHRASES.reaction) });
+  }
+
+  announceSlain() {
+    if (!game.user.isGM) return;
+    const controlled = canvas.tokens?.controlled ?? [];
+    if (!controlled.length) {
+      ui.notifications.warn(loc("Warn.SelectToken"));
+      return;
+    }
+    // Two Bandits read as one "Bandit". Hostile tokens get the harsh lines, everyone else the quiet ones.
+    const hostile = new Set();
+    const other = new Set();
+    for (const token of controlled) {
+      const name = token.document?.name ?? token.name;
+      if (!name) continue;
+      (token.document?.disposition === -1 ? hostile : other).add(name);
+    }
+    const groups = [];
+    if (hostile.size) groups.push({ tone: "hostile", names: [...hostile], line: pick(PHRASES.slainHostile) });
+    if (other.size) groups.push({ tone: "other", names: [...other], line: pick(PHRASES.slainOther) });
+    if (groups.length) this.send({ type: "slain", groups });
+  }
+
+  /* ---------- socket ---------- */
+
+  /** Tell every other client, then do the same thing here (a socket never echoes to its sender). */
+  send(data) {
+    game.socket.emit(SOCKET, data);
+    this.receive(data);
+  }
+
+  receive(data) {
+    if (!data || typeof data !== "object") return;
+    switch (data.type) {
+      case "reaction":
+        this.stage.reaction(String(data.name ?? ""), String(data.line ?? ""));
+        break;
+      case "slain":
+        for (const group of Array.isArray(data.groups) ? data.groups : []) {
+          const names = (Array.isArray(group.names) ? group.names : []).map(String).slice(0, 12);
+          if (names.length) this.stage.slain(names, String(group.line ?? ""), group.tone);
+        }
+        break;
+      case "deathClose":
+        this.stage.closeDeathPrompt();
+        break;
+      case "deathResult":
+        this.stage.closeDeathPrompt();
+        this.stage.deathResult({
+          name: String(data.name ?? ""),
+          kind: ["success", "fail", "revive"].includes(data.kind) ? data.kind : "fail",
+          success: Math.min(3, Math.max(0, Number(data.success) || 0)),
+          failure: Math.min(3, Math.max(0, Number(data.failure) || 0)),
+          line: String(data.line ?? "")
+        });
+        break;
+      case "skipDead":
+        if (game.users.activeGM?.isSelf) this.skipDead(game.combats.get(data.combatId));
+        break;
+    }
+  }
+
+  /* ---------- death saves ---------- */
+
+  maybeDeathPrompt(combat) {
+    this.stage.closeDeathPrompt();
+    if (!getSetting("deathSavePrompt")) return;
+    const combatant = combat?.combatant;
+    if (!combatant || !needsDeathSave(combatant)) return;
+    if (!game.user.isGM && (combatant.hidden || combatant.token?.hidden)) return;
+    this.stage.openDeathPrompt(combatant, (id) => this.rollDeathSave(id));
+  }
+
+  async rollDeathSave(combatantId) {
+    const actor = game.combat?.combatants.get(combatantId)?.actor;
+    if (!actor?.isOwner) return;
+    const state = () => ({ ...readDeath(actor), hp: readHp(actor)?.value ?? 0 });
+    const before = state();
+
+    this.send({ type: "deathClose" });
+
+    let result;
+    try {
+      result = await actor.rollDeathSave({}, { configure: false });
+    } catch (err) {
+      console.error(`${MODULE_ID} | death save failed`, err);
+      ui.notifications.error(loc("Warn.DeathSave"));
+      return;
+    }
+    const roll = Array.isArray(result) ? result[0] : result;
+    if (!roll) return; // cancelled
+
+    // The system has already written the outcome to the actor: read it back rather than re-deriving the rules.
+    const after = state();
+    let kind;
+    let success = after.success;
+    let failure = after.failure;
+    const passed = Number(roll.total) >= 10;
+
+    if (after.hp > 0) kind = "revive";
+    else if (after.failure > before.failure) kind = "fail";
+    else if (after.success > before.success) kind = "success";
+    else if (passed) {
+      // dnd5e clears both counters on the third success, so the totals read 0/0 here.
+      kind = "success";
+      success = Math.min(3, before.success + 1);
+      failure = before.failure;
+    } else {
+      kind = "fail";
+      failure = Math.min(3, before.failure + (roll.isFumble ? 2 : 1));
+    }
+
+    if (kind === "success" && success >= 3) {
+      try {
+        await actor.setFlag(MODULE_ID, "stable", true);
+      } catch (err) {
+        console.warn(`${MODULE_ID} | could not mark the actor stable`, err);
+      }
+    }
+
+    this.send({ type: "deathResult", name: actor.name, kind, success, failure, line: pick(PHRASES.fallen) });
+  }
+
+  /* ---------- reacting to data changes ---------- */
+
+  onCombatUpdate(combat, changed) {
+    const isMine = combat.id === game.combat?.id;
+
+    if ("round" in changed) {
+      const previous = this.rounds.get(combat.id) ?? 0;
+      const round = combat.round ?? 0;
+      const allowed = getSetting("roundBanner") && (round >= 2 || getSetting("bannerRoundOne"));
+      if (isMine && combat.started && round > previous && allowed) this.stage.round(round);
+    }
+    this.rounds.set(combat.id, combat.round ?? 0);
+
+    if (isMine && ("turn" in changed || "round" in changed)) this.maybeDeathPrompt(combat);
+    this.schedule();
+  }
+
+  onCombatDelete(combat) {
+    this.stage.closeDeathPrompt();
+    this.rounds.delete(combat.id);
+    if ((combat.round ?? 0) > 0 && getSetting("encounterEnd")) this.stage.encounterEnd();
+    this.schedule();
+  }
+
+  onActorUpdate(actor) {
+    const combat = game.combat;
+    if (combat?.started) {
+      for (const combatant of combat.combatants) {
+        if (combatant.actor?.uuid !== actor.uuid) continue;
+        const hp = readHp(actor);
+        const seen = this.hpSeen.get(combatant.id);
+        if (hp && seen !== undefined && hp.value > seen) {
+          const list = this.fx.get(combatant.id) ?? [];
+          list.push({ kind: "heal", amount: hp.value - seen, start: Date.now() });
+          if (seen <= 0) list.push({ kind: "revive", amount: 0, start: Date.now() });
+          this.fx.set(combatant.id, list);
+        }
+        if (hp) this.hpSeen.set(combatant.id, hp.value);
+
+        // The die is no longer needed once the character is up, stable or dead.
+        if (this.stage.prompt?.combatantId === combatant.id && !needsDeathSave(combatant)) this.stage.closeDeathPrompt();
+      }
+    }
+
+    // Our own "stable" marker ends when the character is healed or hurt again.
+    if (game.users.activeGM?.isSelf && actor.getFlag?.(MODULE_ID, "stable")) {
+      const hp = readHp(actor);
+      if ((hp && hp.value > 0) || readDeath(actor).failure > 0) actor.unsetFlag(MODULE_ID, "stable");
+    }
+    this.schedule();
   }
 
   /* ---------- rendering ---------- */
@@ -340,47 +932,94 @@ class GrimPulse {
       shown = statuses.slice(0, limit - 1);
       more = statuses.length - shown.length;
     }
-    const items = shown.map((name) => `<li>${esc(name)}</li>`).join("");
-    const tail = more ? `<li class="gp-more">${esc(loc("MoreStatus", { n: more }))}</li>` : "";
+    const items = shown.map((name) => `<li>${wrapStatus(name)}</li>`).join("");
+    const tail = more ? `<li class="gp-more">${wrapStatus(loc("MoreStatus", { n: more }))}</li>` : "";
     return `<ul class="gp-status">${items}${tail}</ul>`;
+  }
+
+  /** Effects still running for this combatant, each with how far along it is. */
+  #activeFx(id) {
+    const now = Date.now();
+    const list = (this.fx.get(id) ?? []).filter((fx) => now - fx.start < (fx.kind === "heal" ? HEAL_MS : REVIVE_MS));
+    if (list.length) this.fx.set(id, list);
+    else this.fx.delete(id);
+    return list.map((fx) => ({ ...fx, elapsed: now - fx.start }));
+  }
+
+  #savesHTML(d) {
+    if (d.stable) return `<span class="gp-stable">${esc(loc("Death.Stable"))}</span>`;
+    if (!d.death) return "";
+    const dots = (count, cls) => [0, 1, 2].map((i) => `<b class="${cls}${i < count ? " gp-on" : ""}"></b>`).join("");
+    return `<span class="gp-saves" aria-label="${esc(loc("Death.Title"))}">${dots(d.death.success, "gp-s")}<i></i>${dots(d.death.failure, "gp-f")}</span>`;
   }
 
   #rowHTML(entry) {
     const d = describe(entry);
+    const active = entry.active;
+    const numbers = d.showNumbers && d.hp;
+
+    // HP line, bar, then AC and initiative. Players only get the bar for combatants whose numbers they may see.
+    let hpBlock = "";
+    if (numbers) {
+      const pct = Math.round(d.hp.pct * 100);
+      const from = this.barSeen.get(d.id) ?? pct;
+      this.barSeen.set(d.id, pct);
+      const tempPct = Math.min(100, Math.round((d.hp.temp / d.hp.max) * 100));
+      const temp = d.hp.temp ? `<em>+${d.hp.temp}</em>` : "";
+      hpBlock = `
+        <div class="gp-hpnum">${d.hp.value}/${d.hp.max}${temp}</div>
+        <div class="gp-bar"><span class="gp-bar-fill" style="width:${from}%" data-to="${pct}"></span>${tempPct ? `<span class="gp-bar-temp" style="width:${tempPct}%"></span>` : ""}</div>`;
+    }
+
     const stats = [];
+    if (active && d.showNumbers && d.ac !== null) stats.push(`<span class="gp-ac"><i class="fa-solid fa-shield-halved"></i>${esc(loc("AC"))} ${d.ac}</span>`);
+    if (!entry.masked) stats.push(`<span class="gp-init"><i class="fa-solid fa-dice-d20"></i>${active ? `${esc(loc("Init"))} ` : ""}${d.init ?? "-"}</span>`);
+    const saves = this.#savesHTML(d);
+    if (saves) stats.push(saves);
 
-    if (d.showNumbers && d.hp) {
-      const temp = d.hp.temp ? ` <em>(+${d.hp.temp})</em>` : "";
-      stats.push(`<span class="gp-hp"><i class="fa-solid fa-heart"></i>${d.hp.value}/${d.hp.max}${temp}</span>`);
+    // Transient effects. A negative animation-delay resumes them mid-way if the strip redraws.
+    const fx = this.#activeFx(d.id);
+    const heal = fx.find((f) => f.kind === "heal");
+    const revive = fx.find((f) => f.kind === "revive");
+    let healHTML = "";
+    if (heal) {
+      const pluses = [0, 1, 2, 3, 4, 5]
+        .map((i) => `<i class="gp-plus" style="left:${8 + i * 16}%;animation-delay:${i * 120 - heal.elapsed}ms">+</i>`)
+        .join("");
+      const amount = d.showNumbers ? `<b class="gp-plus gp-plus-amount" style="animation-delay:${-heal.elapsed}ms">+${heal.amount}</b>` : "";
+      healHTML = `<div class="gp-heal" style="animation-delay:${-heal.elapsed}ms"></div>${pluses}${amount}`;
     }
-    if (entry.active && d.showNumbers && d.ac !== null) {
-      stats.push(`<span class="gp-ac"><i class="fa-solid fa-shield-halved"></i>${d.ac}</span>`);
-    }
-    if (!entry.masked) {
-      stats.push(`<span class="gp-init"><i class="fa-solid fa-dice-d20"></i>${d.init ?? "-"}</span>`);
-    }
-
-    const endTurn = entry.active && d.canEndTurn
-      ? `<button type="button" class="gp-end" data-action="end-turn">${esc(loc("EndTurn"))}</button>`
+    const wingsHTML = revive
+      ? `<svg class="gp-wings" viewBox="-150 -6 500 216" aria-hidden="true" style="--gp-fx-delay:${-revive.elapsed}ms">${WINGS.replaceAll("gps-wing", "gp-wing")}</svg>`
       : "";
 
-    const classes = ["gp-row", entry.active ? "gp-active" : "gp-queued"];
+    const classes = ["gp-row", active ? "gp-active" : "gp-queued"];
     if (d.dead) classes.push("gp-dead");
+    if (d.dying) classes.push("gp-dying");
+    if (d.temp) classes.push("gp-temp");
 
     return `
       <li class="${classes.join(" ")}" data-key="${esc(d.id)}" data-combatant-id="${esc(d.id)}"
           data-dispo="${d.dispo}" data-blood="${d.blood}" style="--gp-beat:${d.beat}s;--gp-amp:${d.amp}">
         <span class="gp-mark"></span>
+        ${wingsHTML}
         <div class="gp-card">
-          <div class="gp-portrait"><img src="${esc(d.img)}" alt="" draggable="false">${d.blood ? BLOOD_SVG : ""}</div>
-          <div class="gp-panel">
-            ${d.dead ? ECG_FLAT : ECG_LIVE}
-            <div class="gp-name">${esc(d.name)}</div>
-            <div class="gp-stats">${stats.join("")}</div>
-            ${endTurn}
+          <div class="gp-body">
+            <div class="gp-portrait"><img src="${esc(d.img)}" alt="" draggable="false">${d.blood ? BLOOD_SVG : ""}${d.dead ? SKULL_ICON : ""}</div>
+            <i class="gp-dispo"></i>
+            <div class="gp-panel">
+              ${d.dead ? ECG_FLAT : ECG_LIVE}
+              <div class="gp-name">${esc(d.name)}</div>
+              ${hpBlock}
+              <div class="gp-stats">${stats.join("")}</div>
+            </div>
+            <div class="gp-wash"></div>
+            ${heal ? `<div class="gp-heal-in" style="animation-delay:${-heal.elapsed}ms"></div>` : ""}
           </div>
+          ${active ? FRAME_ACTIVE : FRAME_QUEUED}
+          ${healHTML}
         </div>
-        ${this.#statusHTML(d.statuses, entry.active ? ACTIVE_STATUS_LIMIT : QUEUED_STATUS_LIMIT)}
+        ${this.#statusHTML(d.statuses, active ? ACTIVE_STATUS_LIMIT : QUEUED_STATUS_LIMIT)}
       </li>`;
   }
 
@@ -390,13 +1029,23 @@ class GrimPulse {
     if (!combat?.started || !combat.turns?.length) {
       this.el.hidden = true;
       this.list.innerHTML = "";
+      this.hpSeen.clear();
+      this.barSeen.clear();
+      this.fx.clear();
       return;
     }
     this.el.hidden = false;
 
+    // Remember every combatant's HP, including the ones off the end of the strip, so healing can be noticed.
+    for (const combatant of combat.combatants) {
+      const hp = readHp(combatant.actor);
+      if (hp) this.hpSeen.set(combatant.id, hp.value);
+    }
+
     const entries = this.#entries(combat);
     this.el.querySelector(".gp-round").textContent = loc("Round", { n: combat.round });
-    this.el.querySelector(".gp-turn").textContent = `${(combat.turn ?? 0) + 1}/${combat.turns.length}`;
+    this.el.querySelector(".gp-turn").textContent = loc("TurnOf", { n: (combat.turn ?? 0) + 1, total: combat.turns.length });
+    this.el.querySelector('[data-action="end-turn"]').disabled = !(game.user.isGM || combat.combatant?.isOwner);
 
     // Remember where every frame was, so frames can slide up to their new place.
     const before = new Map();
@@ -413,7 +1062,13 @@ class GrimPulse {
     });
     this.list.innerHTML = html;
 
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    // HP bars were drawn at their old width: let them travel to the new one.
+    for (const fill of this.list.querySelectorAll(".gp-bar-fill")) {
+      void fill.offsetWidth;
+      fill.style.width = `${fill.dataset.to}%`;
+    }
+
+    if (reducedMotion()) return;
     const scale = Number(getSetting("scale")) || 1;
     for (const node of this.list.querySelectorAll("[data-key]")) {
       const old = before.get(node.dataset.key);
@@ -426,45 +1081,6 @@ class GrimPulse {
         node.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 460, easing: "cubic-bezier(.2,.8,.2,1)" });
       }
     }
-  }
-
-  /* ---------- round banner ---------- */
-
-  onCombatUpdate(combat, changed) {
-    if ("round" in changed) {
-      const previous = this.rounds.get(combat.id) ?? 0;
-      const round = combat.round ?? 0;
-      const isMine = combat.id === game.combat?.id;
-      const allowed = getSetting("roundBanner") && (round >= 2 || getSetting("bannerRoundOne"));
-      if (isMine && combat.started && round > previous && allowed) this.showBanner(round);
-    }
-    this.rounds.set(combat.id, combat.round ?? 0);
-    this.schedule();
-  }
-
-  showBanner(round) {
-    document.getElementById("grim-pulse-banner")?.remove();
-    const sparks = Array.from({ length: 16 }, () => {
-      const left = 18 + Math.random() * 64;
-      const top = -15 + Math.random() * 130;
-      const delay = 0.45 + Math.random() * 1.1;
-      const size = 8 + Math.random() * 14;
-      return `<i class="gpb-spark" style="left:${left.toFixed(1)}%;top:${top.toFixed(1)}%;width:${size.toFixed(0)}px;height:${size.toFixed(0)}px;animation-delay:${delay.toFixed(2)}s"></i>`;
-    }).join("");
-
-    const banner = document.createElement("div");
-    banner.id = "grim-pulse-banner";
-    banner.dataset.theme = getSetting("theme");
-    banner.innerHTML = `
-      <div class="gpb-shade"></div>
-      <div class="gpb-band">
-        <div class="gpb-rule"></div>
-        <div class="gpb-text">${esc(loc("Round", { n: round }))}</div>
-        <div class="gpb-rule"></div>
-        ${sparks}
-      </div>`;
-    document.body.appendChild(banner);
-    setTimeout(() => banner.remove(), BANNER_MS + 200);
   }
 }
 
@@ -482,37 +1098,41 @@ function applyCoreTrackerVisibility() {
 Hooks.once("init", () => {
   const S = "GRIMPULSE.Settings";
   const rerender = () => tracker?.schedule();
+  const toggle = (key, initial) =>
+    game.settings.register(MODULE_ID, key, {
+      name: `${S}.${key}.Name`, hint: `${S}.${key}.Hint`, scope: "world", config: true, type: Boolean, default: initial
+    });
 
+  // World scope: the GM picks the theme and every player's strip follows.
   game.settings.register(MODULE_ID, "theme", {
-    name: `${S}.Theme.Name`, hint: `${S}.Theme.Hint`, scope: "client", config: true, type: String, default: "crimson",
-    choices: { crimson: `${S}.Theme.Crimson`, ash: `${S}.Theme.Ash`, amethyst: `${S}.Theme.Amethyst`, abyss: `${S}.Theme.Abyss` },
+    name: `${S}.theme.Name`, hint: `${S}.theme.Hint`, scope: "world", config: true, type: String, default: "crimson",
+    choices: { crimson: `${S}.theme.Crimson`, ash: `${S}.theme.Ash`, amethyst: `${S}.theme.Amethyst`, abyss: `${S}.theme.Abyss` },
     onChange: () => tracker?.applyTheme()
   });
   game.settings.register(MODULE_ID, "scale", {
-    name: `${S}.Scale.Name`, hint: `${S}.Scale.Hint`, scope: "client", config: true, type: Number, default: 1,
+    name: `${S}.scale.Name`, hint: `${S}.scale.Hint`, scope: "client", config: true, type: Number, default: 1,
     range: { min: 0.7, max: 1.5, step: 0.05 },
     onChange: () => tracker?.applyScale()
   });
   game.settings.register(MODULE_ID, "maxTurns", {
-    name: `${S}.MaxTurns.Name`, hint: `${S}.MaxTurns.Hint`, scope: "world", config: true, type: Number, default: 8,
+    name: `${S}.maxTurns.Name`, hint: `${S}.maxTurns.Hint`, scope: "world", config: true, type: Number, default: 8,
     range: { min: 3, max: 12, step: 1 }, onChange: rerender
   });
   game.settings.register(MODULE_ID, "playerNumbers", {
-    name: `${S}.PlayerNumbers.Name`, hint: `${S}.PlayerNumbers.Hint`, scope: "world", config: true, type: String, default: "party",
-    choices: { party: `${S}.PlayerNumbers.Party`, all: `${S}.PlayerNumbers.All` }, onChange: rerender
+    name: `${S}.playerNumbers.Name`, hint: `${S}.playerNumbers.Hint`, scope: "world", config: true, type: String, default: "party",
+    choices: { party: `${S}.playerNumbers.Party`, all: `${S}.playerNumbers.All` }, onChange: rerender
   });
   game.settings.register(MODULE_ID, "imageSource", {
-    name: `${S}.ImageSource.Name`, hint: `${S}.ImageSource.Hint`, scope: "world", config: true, type: String, default: "actor",
-    choices: { actor: `${S}.ImageSource.Actor`, token: `${S}.ImageSource.Token` }, onChange: rerender
+    name: `${S}.imageSource.Name`, hint: `${S}.imageSource.Hint`, scope: "world", config: true, type: String, default: "actor",
+    choices: { actor: `${S}.imageSource.Actor`, token: `${S}.imageSource.Token` }, onChange: rerender
   });
-  game.settings.register(MODULE_ID, "roundBanner", {
-    name: `${S}.RoundBanner.Name`, hint: `${S}.RoundBanner.Hint`, scope: "world", config: true, type: Boolean, default: true
-  });
-  game.settings.register(MODULE_ID, "bannerRoundOne", {
-    name: `${S}.BannerRoundOne.Name`, hint: `${S}.BannerRoundOne.Hint`, scope: "world", config: true, type: Boolean, default: false
-  });
+  toggle("skipDead", true);
+  toggle("deathSavePrompt", true);
+  toggle("roundBanner", true);
+  toggle("bannerRoundOne", false);
+  toggle("encounterEnd", true);
   game.settings.register(MODULE_ID, "hideCoreTracker", {
-    name: `${S}.HideCoreTracker.Name`, hint: `${S}.HideCoreTracker.Hint`, scope: "world", config: true, type: Boolean, default: false,
+    name: `${S}.hideCoreTracker.Name`, hint: `${S}.hideCoreTracker.Hint`, scope: "world", config: true, type: Boolean, default: false,
     onChange: applyCoreTrackerVisibility
   });
   game.settings.register(MODULE_ID, "position", {
@@ -521,17 +1141,23 @@ Hooks.once("init", () => {
 });
 
 Hooks.once("ready", () => {
-  tracker = new GrimPulse();
+  const stage = new Stage();
+  stage.mount();
+  tracker = new GrimPulse(stage);
   tracker.mount();
   applyCoreTrackerVisibility();
-  game.modules.get(MODULE_ID).api = { tracker, showBanner: (round) => tracker.showBanner(round) };
+  game.modules.get(MODULE_ID).api = { tracker, stage, PHRASES };
+
+  game.socket.on(SOCKET, (data) => tracker.receive(data));
 
   Hooks.on("updateCombat", (combat, changed) => tracker.onCombatUpdate(combat, changed));
+  Hooks.on("deleteCombat", (combat) => tracker.onCombatDelete(combat));
+  Hooks.on("updateActor", (actor) => tracker.onActorUpdate(actor));
 
   const refreshOn = [
-    "createCombat", "deleteCombat", "combatStart",
+    "createCombat", "combatStart",
     "createCombatant", "updateCombatant", "deleteCombatant",
-    "updateActor", "updateToken",
+    "updateToken",
     "createActiveEffect", "updateActiveEffect", "deleteActiveEffect",
     "renderCombatTracker", "canvasReady"
   ];

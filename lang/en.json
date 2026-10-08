@@ -1,24 +1,83 @@
 {
   "GRIMPULSE": {
     "Round": "Round {n}",
-    "MoreStatus": "+ {n} More Status",
+    "TurnOf": "Turn {n} of {total}",
+    "MoreStatus": "+{n} More Status",
     "Unknown": "???",
+    "AC": "AC",
+    "Init": "Init",
     "EndTurn": "End turn",
-    "PrevTurn": "Previous turn",
-    "NextTurn": "Next turn",
+    "Reaction": "Reaction",
+    "EncounterEnd": "Encounter End",
+    "SlainHint": "Announce the selected tokens as dead",
     "HandleHint": "Drag to move. Double-click to reset the position.",
+    "Death": {
+      "Title": "Death saving throw",
+      "Roll": "Click the die to roll",
+      "Wait": "Waiting for the player to roll",
+      "Hide": "Hide",
+      "Success": "Holds on. Success {n} of 3",
+      "Failure": "Slipping away. Failure {n} of 3",
+      "Stable": "Stable",
+      "Revive": "Rises again"
+    },
+    "Warn": {
+      "SelectToken": "Grim Pulse: select a token first.",
+      "DeathSave": "Grim Pulse: the death saving throw could not be rolled. Roll it from the character sheet."
+    },
     "Settings": {
-      "Theme": { "Name": "Colour theme", "Hint": "Same four themes as Grim Almanac. Each player picks their own.",
-        "Crimson": "Black and red", "Ash": "Black, grey and white", "Amethyst": "White and purple", "Abyss": "Black and blue" },
-      "Scale": { "Name": "Size", "Hint": "Scale of the turn strip on your screen." },
-      "MaxTurns": { "Name": "Turns shown", "Hint": "How many upcoming turns the strip shows at once." },
-      "PlayerNumbers": { "Name": "Exact HP and AC shown to players", "Hint": "Everyone else is shown as a heartbeat line and blood stains only. The GM always sees the numbers.",
-        "Party": "Player characters only", "All": "Every combatant" },
-      "ImageSource": { "Name": "Picture used", "Hint": "Which image fills the turn frame.",
-        "Actor": "Actor portrait", "Token": "Token image" },
-      "RoundBanner": { "Name": "Round banner", "Hint": "Dim the screen and sweep the round number across it when a new round begins." },
-      "BannerRoundOne": { "Name": "Round banner on round 1", "Hint": "Leave this off if another module, such as Encounter FX, already announces the start of combat." },
-      "HideCoreTracker": { "Name": "Hide Foundry's Combat Tracker from players", "Hint": "Removes the Combat tab from the sidebar for players. The GM always keeps it." }
+      "theme": {
+        "Name": "Colour theme",
+        "Hint": "Set by the GM for the whole table. Same four themes as Grim Almanac.",
+        "Crimson": "Black and red",
+        "Ash": "Black, grey and white",
+        "Amethyst": "White and purple",
+        "Abyss": "Black and blue"
+      },
+      "scale": {
+        "Name": "Size",
+        "Hint": "Scale of the turn strip on your own screen."
+      },
+      "maxTurns": {
+        "Name": "Turns shown",
+        "Hint": "How many upcoming turns the strip shows at once."
+      },
+      "playerNumbers": {
+        "Name": "Exact HP and AC shown to players",
+        "Hint": "Everyone else is shown as a heartbeat line and blood stains only. The GM always sees the numbers.",
+        "Party": "Player characters only",
+        "All": "Every combatant"
+      },
+      "imageSource": {
+        "Name": "Picture used",
+        "Hint": "Which image fills the turn frame.",
+        "Actor": "Actor portrait",
+        "Token": "Token image"
+      },
+      "skipDead": {
+        "Name": "End turn skips the dead",
+        "Hint": "The End turn button passes over any non-player combatant at 0 HP. Foundry's own tracker buttons are not affected."
+      },
+      "deathSavePrompt": {
+        "Name": "Death save die",
+        "Hint": "When a player character starts their turn at 0 HP, show a die on everyone's screen. Only the character's owner or the GM can click it."
+      },
+      "roundBanner": {
+        "Name": "Round banner",
+        "Hint": "Dim the screen and sweep the round number across it when a new round begins."
+      },
+      "bannerRoundOne": {
+        "Name": "Round banner on round 1",
+        "Hint": "Leave this off if another module, such as Encounter FX, already announces the start of combat."
+      },
+      "encounterEnd": {
+        "Name": "Encounter End text",
+        "Hint": "Slowly bring up \"Encounter End\" when the combat is ended."
+      },
+      "hideCoreTracker": {
+        "Name": "Hide Foundry's Combat Tracker from players",
+        "Hint": "Removes the Combat tab from the sidebar for players. The GM always keeps it."
+      }
     }
   }
 }
