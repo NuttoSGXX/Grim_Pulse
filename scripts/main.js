@@ -1,5 +1,5 @@
 /**
- * Grim Pulse - Combat Turn Tracker  (v0.2.3)
+ * Grim Pulse - Combat Turn Tracker  (v0.2.4)
  * Foundry VTT V13 / V14, written against the dnd5e system.
  *
  * Two DOM roots, both plain elements:
@@ -178,56 +178,26 @@ const BLOOD_SVG = `<svg class="gp-blood" viewBox="0 0 100 100" preserveAspectRat
 </g></svg>`;
 
 /**
- * The skull, drawn as a two-tone ink stencil: one ink silhouette with drips, and bone shapes
- * laid on top of it. The ink follows the theme colour (it falls back to red), the bone stays bone.
- * Every shape names its own fill, so nothing depends on inherited CSS.
+ * Skull and wing art are image files in assets/, so they can be swapped without touching code:
+ *   assets/skull.png  the skull silhouette (eye and nose holes are transparent)
+ *   assets/wing.png   the right wing, white. The left wing is the same image mirrored.
+ * Everything below places them in one coordinate space where the skull is 200 units wide.
+ * If you replace skull.png with a different skull, update SKULL_H, EYES and the crack paths to match it.
  */
-const SKULL_VIEWBOX = "8 0 184 270";
-const SKULL_OUTLINE = "M100 6 C52 6 18 42 18 94 C18 104 19 112 22 120 C16 124 15 134 20 142 C26 150 34 152 40 156 C40 170 42 186 46 200 C50 218 62 234 80 241 C90 245 110 245 120 241 C138 234 150 218 154 200 C158 186 160 170 160 156 C166 152 174 150 180 142 C185 134 184 124 178 120 C181 112 182 104 182 94 C182 42 148 6 100 6 Z";
+const assetUrl = (name) => {
+  const path = `modules/${MODULE_ID}/assets/${name}`;
+  return globalThis.foundry?.utils?.getRoute ? foundry.utils.getRoute(path) : path;
+};
 
-const INK = `style="fill:var(--gp-line,#a8141f)" stroke="none"`;
-const BONE = `fill="url(#gp-g-bone) #f1e8d6" stroke="none"`;
-
-/** Two rows of teeth on a slight smile curve: bone shapes sitting in the ink of the mouth. */
-function skullTeeth() {
-  const row = (widths, startX, y, height) => {
-    let x = startX;
-    return widths
-      .map((w, i) => {
-        const lift = Math.abs(i - (widths.length - 1) / 2) * 1.3;
-        const tooth = `<rect x="${(x + 0.9).toFixed(1)}" y="${(y - lift).toFixed(1)}" width="${(w - 1.8).toFixed(1)}" height="${height}" rx="2.8" ${BONE}/>`;
-        x += w;
-        return tooth;
-      })
-      .join("");
-  };
-  return row([8, 9, 10, 11, 11, 10, 9, 8], 62, 173, 17) + row([7, 8, 9, 10, 10, 9, 8, 7], 66, 194, 13);
-}
-
-const SKULL_DRIPS = [[23, 138, 4.4, 50], [31, 150, 3.4, 26], [172.6, 138, 4.4, 36], [164, 150, 3.6, 62], [60, 230, 4, 34], [132, 228, 3.6, 22], [96, 242, 3.2, 14]]
-  .map(([x, y, w, h]) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${w / 2}" ${INK}/><circle cx="${x + w / 2}" cy="${y + h}" r="${(w * 0.72).toFixed(1)}" ${INK}/>`)
-  .join("");
-
-const SKULL_CORE = `
-${SKULL_DRIPS}
-<path d="${SKULL_OUTLINE}" ${INK}/>
-<path d="M100 16 C58 16 30 46 30 92 C30 100 31 106 33 112 C52 98 82 98 100 106 C118 98 148 98 167 112 C171 104 172 98 172 92 C172 46 142 16 100 16 Z" ${BONE}/>
-<path d="M26 138 C40 132 56 142 70 142 C80 142 88 130 92 110 L108 110 C112 130 120 142 130 142 C144 142 160 132 174 138 C176 144 170 150 160 152 C150 154 146 160 144 170 L56 170 C54 160 50 154 40 152 C30 150 24 144 26 138 Z" ${BONE}/>
-<path d="M48 166 C48 180 50 192 54 202 C60 220 70 230 84 235 C94 238 106 238 116 235 C130 230 140 220 146 202 C150 192 152 180 152 166 C148 172 146 180 144 190 C142 200 138 208 132 212 L68 212 C62 208 58 200 56 190 C54 180 52 172 48 166 Z" ${BONE}/>
-${skullTeeth()}
-<path d="M100 122 C92 132 86 146 90 154 C94 158 98 154 100 148 C102 154 106 158 110 154 C114 146 108 132 100 122 Z" ${INK}/>
-<path d="M36 106 C33 88 37 70 47 56 C42 74 43 90 48 101 Z" ${INK}/>
-<path d="M165 106 C170 92 168 76 160 62 C163 78 161 92 154 101 C158 104 162 106 165 106 Z" ${INK}/>
-<path d="M118 99 C132 92 148 92 160 98 C148 96 134 97 122 102 Z" ${INK}/>
-<path d="M40 146 C50 150 58 156 62 166 C54 160 46 154 38 152 Z M160 146 C150 150 142 156 138 166 C146 160 154 154 162 152 Z" ${INK}/>
-<path d="M86 222 C95 227 105 227 114 222 C105 231 95 231 86 222 Z" ${INK}/>
-<path d="M40 60 C46 44 58 32 74 26 C60 36 50 48 46 62 C44 66 39 64 40 60 Z" fill="#ffffff" fill-opacity="0.9" stroke="none"/>`;
+const SKULL_H = 210; // skull.png is 333 x 350, drawn 200 wide
+const SKULL_VIEWBOX = `0 0 200 ${SKULL_H}`;
+const SKULL_CORE = `<image href="${assetUrl("skull.png")}" x="0" y="0" width="200" height="${SKULL_H}" preserveAspectRatio="none"/>`;
 
 /**
  * Light in an eye socket. Not a drawn flame: a blurred glow, a hot core, a wisp that
  * stretches up out of the socket, and embers that drift upward and die out.
  */
-const EYES = [[64, 124], [136, 124]];
+const EYES = [[57.3, 133.6], [141.8, 133.7]]; // centres of the eye holes in skull.png
 
 function eyeFx(cx, cy, cls) {
   const embers = [0, 1, 2, 3, 4, 5, 6]
@@ -251,49 +221,13 @@ const crack = (n, d) => `<path class="gps-crack gps-crack-${n}" pathLength="1" d
 const CRACKS = [
   crack(1, "M112 17 L104 40 L116 58 L100 76 L106 98 M104 40 L88 52"), // first failure
   crack(2, "M116 58 L140 50 L152 66 M34 84 L52 78 L48 62 L64 50 M100 76 L84 82"), // second failure
-  crack(3, "M152 66 L168 74 M64 50 L74 30 M52 78 L58 96 M140 50 L146 32 M68 224 L84 216 L80 232 M130 222 L118 230 L122 216") // third, just before it bursts
+  crack(3, "M152 66 L168 74 M64 50 L74 30 M52 78 L58 96 M140 50 L146 32 M106 98 L100 120 L92 138 L98 148") // third, just before it bursts
 ];
 
-/**
- * A folded wing in bold line-art: a curled arch at the top, three rows of short rounded
- * feathers under it, then long pointed feathers hanging down. White fill, heavy ink outline.
- */
-function buildWing() {
-  const arm = [[152, 120], [178, 72], [214, 30], [252, 10], [284, 12]];
-  const at = (t) => {
-    const f = Math.min(0.9999, Math.max(0, t)) * (arm.length - 1);
-    const i = Math.floor(f);
-    const k = f - i;
-    return [arm[i][0] + (arm[i + 1][0] - arm[i][0]) * k, arm[i][1] + (arm[i + 1][1] - arm[i][1]) * k];
-  };
-  const n = (v) => v.toFixed(1);
-  const OUT = `fill="#ffffff" stroke="#16090b" stroke-width="2.6" stroke-linejoin="round"`;
-  const blade = (L, w) => `M0 ${n(-w)} C${n(L * 0.4)} ${n(-w * 1.15)} ${n(L * 0.8)} ${n(-w * 0.55)} ${n(L)} 0 C${n(L * 0.75)} ${n(w * 0.15)} ${n(L * 0.4)} ${n(w * 0.95)} 0 ${n(w)} Z`;
-  const scallop = (L, w) => `M0 ${n(-w)} C${n(L * 0.55)} ${n(-w * 1.25)} ${n(L)} ${n(-w * 0.7)} ${n(L)} 0 C${n(L * 0.96)} ${n(w * 0.8)} ${n(L * 0.5)} ${n(w * 1.2)} 0 ${n(w)} Z`;
-  const row = (shape, count, t0, t1, a0, a1, l0, l1, w, drop) => {
-    let out = "";
-    for (let i = count - 1; i >= 0; i--) {
-      const k = i / (count - 1);
-      const [x, y] = at(t0 + (t1 - t0) * k);
-      const place = `translate(${n(x)} ${n(y + drop)}) rotate(${n(a0 + (a1 - a0) * k)})`;
-      const L = l0 + (l1 - l0) * k;
-      out += `<path d="${shape(L, w)}" transform="${place}" ${OUT}/><path d="M${n(L * 0.18)} 0 Q${n(L * 0.5)} ${n(-w * 0.3)} ${n(L * 0.84)} -0.6" transform="${place}" fill="none" stroke="#16090b" stroke-width="1.3" stroke-linecap="round"/>`;
-    }
-    return out;
-  };
-  return `
-${row(blade, 6, 0.22, 1, 93, 64, 206, 128, 17, 8)}
-${row(blade, 6, 0.12, 0.96, 98, 60, 128, 88, 16, 5)}
-${row(scallop, 6, 0.04, 0.95, 104, 58, 70, 54, 15, 2)}
-${row(scallop, 6, 0.02, 0.92, 108, 56, 46, 36, 13.5, 0)}
-${row(scallop, 5, 0.04, 0.88, 112, 54, 27, 23, 12, -2)}
-<path d="M144 124 C148 86 176 40 214 20 C240 6 270 0 292 8 C300 11 299 21 290 20 C268 15 246 21 226 35 C198 55 178 89 170 126 Z" ${OUT}/>
-<path d="M160 104 C170 74 190 48 218 32 M242 15 C256 11 270 11 282 14" fill="none" stroke="#16090b" stroke-width="1.5" stroke-linecap="round"/>`;
-}
-
-const WING = buildWing();
+/** The right wing sits behind the skull with its root low at the jaw; the left is its mirror image. */
+const WING = `<image href="${assetUrl("wing.png")}" x="127.8" y="-67" width="252.4" height="267" preserveAspectRatio="none"/>`;
 const WINGS = `<g class="gps-wing gps-wing-r">${WING}</g><g transform="translate(200 0) scale(-1 1)"><g class="gps-wing gps-wing-l">${WING}</g></g>`;
-const WINGS_VIEWBOX = "-150 -14 500 344";
+const WINGS_VIEWBOX = "-190 -76 580 296";
 
 /** A d20 seen face-on. Face shades are mixed from the theme colour in CSS. */
 const D20 = `<svg viewBox="0 0 200 200" aria-hidden="true">
@@ -317,7 +251,7 @@ const SHARED_DEFS = `<svg id="grim-pulse-defs" width="0" height="0" aria-hidden=
 <linearGradient id="gp-g-feather2" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#e3ddcd"/></linearGradient>
 <radialGradient id="gp-g-orb"><stop offset="0" stop-color="#ffffff"/><stop offset="0.25" stop-color="#ffe9a6"/><stop offset="0.55" stop-color="#ffb02e"/><stop offset="1" stop-color="#ff7800" stop-opacity="0"/></radialGradient>
 <linearGradient id="gp-g-glint" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffffff" stop-opacity="0"/><stop offset="0.5" stop-color="#ffffff" stop-opacity="0.95"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></linearGradient>
-<clipPath id="gp-clip-skull"><path d="${SKULL_OUTLINE}"/></clipPath>
+<mask id="gp-mask-skull" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="${SKULL_H}">${SKULL_CORE}</mask>
 <symbol id="gp-skull-sym" viewBox="${SKULL_VIEWBOX}">${SKULL_CORE}</symbol>
 </defs></svg>`;
 
@@ -637,12 +571,12 @@ class Stage {
     let shimmer = "";
     if (winged) {
       const stars = Array.from({ length: 12 }, () => {
-        const x = (-130 + Math.random() * 460).toFixed(0);
-        const y = (Math.random() * 300).toFixed(0);
+        const x = (-170 + Math.random() * 540).toFixed(0);
+        const y = (-60 + Math.random() * 260).toFixed(0);
         const size = (0.6 + Math.random() * 1.1).toFixed(2);
         return `<g transform="translate(${x} ${y}) scale(${size})"><path class="gps-star" d="M0 -10 L2.2 -2.2 L10 0 L2.2 2.2 L0 10 L-2.2 2.2 L-10 0 L-2.2 -2.2 Z" fill="#ffffff" style="animation-delay:${(1.2 + Math.random() * 1.8).toFixed(2)}s"/></g>`;
       }).join("");
-      shimmer = `<g clip-path="url(#gp-clip-skull)"><g transform="skewX(-18)"><rect class="gps-glint" x="-20" y="0" width="70" height="260" fill="url(#gp-g-glint) #ffffff"/></g></g>${stars}`;
+      shimmer = `<g mask="url(#gp-mask-skull)"><g transform="skewX(-18)"><rect class="gps-glint" x="-10" y="0" width="70" height="220" fill="url(#gp-g-glint) #ffffff"/></g></g>${stars}`;
     }
 
     // For the burst, the same skull is drawn once per wedge and each wedge flies off on its own.
@@ -654,9 +588,9 @@ class Stage {
         const a0 = (i / wedges) * Math.PI * 2;
         const a1 = ((i + 1) / wedges) * Math.PI * 2;
         const mid = (a0 + a1) / 2;
-        const p = (a) => `${(100 + Math.cos(a) * 300).toFixed(1)},${(125 + Math.sin(a) * 300).toFixed(1)}`;
+        const p = (a) => `${(100 + Math.cos(a) * 300).toFixed(1)},${(110 + Math.sin(a) * 300).toFixed(1)}`;
         const dist = 150 + Math.random() * 130;
-        clips += `<clipPath id="${id}-${i}"><polygon points="100,125 ${p(a0)} ${p(a1)}"/></clipPath>`;
+        clips += `<clipPath id="${id}-${i}"><polygon points="100,110 ${p(a0)} ${p(a1)}"/></clipPath>`;
         shards += `<g class="gps-shard" clip-path="url(#${id}-${i})" style="--dx:${(Math.cos(mid) * dist).toFixed(0)}px;--dy:${(Math.sin(mid) * dist).toFixed(0)}px;--rot:${((Math.random() - 0.5) * 220).toFixed(0)}deg">${SKULL_CORE}${cracks}</g>`;
       }
     }

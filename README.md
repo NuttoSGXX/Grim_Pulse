@@ -46,10 +46,16 @@ The colour theme is a world setting: the GM picks it and every player's strip fo
 
 All lines live in the `PHRASES` block at the top of `scripts/main.js`: `reaction`, `fallen`, `slainHostile`, `slainOther`. Add, remove or reword them freely.
 
+## Art
+
+The skull and wings are image files in `assets/` (`skull.png`, `wing.png`), supplied by the module owner. `wing.png` is the right wing only; the left is the same image mirrored. The wing artwork comes from Pngtree: check its licence terms (attribution or a paid licence may be required) before publishing the module publicly.
+
+To use different art, replace the files. A different skull also needs `SKULL_H`, `EYES` and the crack paths in `scripts/main.js` updated so the eye light and cracks line up.
+
 ## Install
 
 ```
 https://github.com/NuttoSGXX/Grim_Pulse/releases/latest/download/module.json
 ```
 
-For a release, attach `module.json` and `module.zip` to a GitHub Release tagged `v0.2.3`.
+For a release, attach `module.json` and `module.zip` to a GitHub Release tagged `v0.2.4`.
